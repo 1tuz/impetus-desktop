@@ -835,27 +835,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_socket_respects_stable_env() {
-        // ponytail: env mutate is process-global; fine for one unit smoke
+    fn default_socket_env_stable_vs_smoke() {
+        // ponytail: env mutate is process-global — keep both cases in one test
+        // so parallel lib tests cannot race IMPETUS_SOCKET.
         let previous = std::env::var("IMPETUS_SOCKET").ok();
-        // SAFETY: single-threaded test; restore env after assertion
         unsafe {
             std::env::set_var("IMPETUS_SOCKET", "/tmp/stable-harness.sock");
         }
         assert_eq!(default_socket_path(), "/tmp/stable-harness.sock");
-        match previous {
-            Some(value) => unsafe {
-                std::env::set_var("IMPETUS_SOCKET", value);
-            },
-            None => unsafe {
-                std::env::remove_var("IMPETUS_SOCKET");
-            },
-        }
-    }
-
-    #[test]
-    fn default_socket_ignores_smoke_tmp_env() {
-        let previous = std::env::var("IMPETUS_SOCKET").ok();
         unsafe {
             std::env::set_var("IMPETUS_SOCKET", "/tmp/impetus-cr-0LbE/harness.sock");
         }

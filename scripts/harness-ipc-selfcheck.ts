@@ -102,6 +102,39 @@ check("Stop + intent hotkeys documented", () => {
   }
 });
 
+check("PTY Tauri cmds registered and TerminalPanel wired", () => {
+  for (const name of [
+    "pty_start",
+    "pty_attach",
+    "pty_input",
+    "pty_output",
+    "pty_resize",
+    "pty_detach",
+    "pty_terminate",
+    "pty_status",
+  ]) {
+    if (!harness.includes(`pub async fn ${name}`)) {
+      throw new Error(`harness.rs missing ${name}`);
+    }
+    if (!lib.includes(`commands::${name}`)) {
+      throw new Error(`lib.rs does not register ${name}`);
+    }
+  }
+  const panel = readFileSync(
+    join(root, "src/lib/components/TerminalPanel.svelte"),
+    "utf8",
+  );
+  if (!panel.includes('"pty_start"')) {
+    throw new Error("TerminalPanel never invokes pty_start");
+  }
+  if (!panel.includes("pty_output") || !panel.includes("pty_input")) {
+    throw new Error("TerminalPanel missing output poll or input");
+  }
+  if (!page.includes("TerminalPanel")) {
+    throw new Error("page does not mount TerminalPanel");
+  }
+});
+
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`);
   process.exit(1);

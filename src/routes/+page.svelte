@@ -47,6 +47,7 @@
   import Composer from "$lib/components/Composer.svelte";
   import SessionRail from "$lib/components/SessionRail.svelte";
   import SetupWizard from "$lib/components/SetupWizard.svelte";
+  import TerminalPanel from "$lib/components/TerminalPanel.svelte";
   import Transcript from "$lib/components/Transcript.svelte";
   import "$lib/components/shell.css";
 
@@ -148,6 +149,7 @@
   let appearance = $state<AppearancePref>(DEFAULT_APPEARANCE);
   let themeId = $state(DEFAULT_THEME_ID);
   let showPrefs = $state(false);
+  let terminalOpen = $state(false);
 
   function applyCurrentTheme() {
     const next = applyThemePrefs(packId, appearance);
@@ -891,11 +893,22 @@
       showSetup = false;
       return true;
     }
+    if (terminalOpen) {
+      terminalOpen = false;
+      return true;
+    }
     return false;
   }
 
   function onKeydown(event: KeyboardEvent) {
     suppressBrowserChrome(event);
+
+    // Ctrl+` toggles daemon PTY panel (thin xterm over harness IPC).
+    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "`") {
+      event.preventDefault();
+      terminalOpen = !terminalOpen;
+      return;
+    }
 
     if (event.key === "Escape") {
       if (closeOverlays()) {
@@ -1161,10 +1174,12 @@
       {busy}
       {daemonReachable}
       {socketPath}
+      {terminalOpen}
       onToggleAppearance={toggleAppearance}
       onConnect={() => void connect()}
       onDisconnect={() => void disconnect()}
       onStartDaemon={() => void startDaemon()}
+      onToggleTerminal={() => (terminalOpen = !terminalOpen)}
     />
 
     <Transcript
@@ -1199,6 +1214,13 @@
       onPasteImages={(files) => void addImageFiles(files)}
       onRemoveAttachment={removeAttachment}
       onModeChange={(id) => void changeAgentMode(id)}
+    />
+
+    <TerminalPanel
+      bind:open={terminalOpen}
+      sessionId={selectedSessionId}
+      {workspaceRoot}
+      {connected}
     />
   </main>
 </div>

@@ -798,6 +798,191 @@ pub async fn open_external(url: String) -> CommandResult<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PtySessionDto {
+    pub pty_id: u64,
+    pub owner_session_id: String,
+    pub state: String,
+    pub command: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PtyOutputDto {
+    pub pty_id: u64,
+    pub data: Vec<u8>,
+    pub dropped_total: u64,
+    pub eof: bool,
+}
+
+fn pty_state_label(state: &impetus_client::protocol::PtySessionState) -> String {
+    use impetus_client::protocol::PtySessionState;
+    match state {
+        PtySessionState::Starting => "starting".into(),
+        PtySessionState::Running { pid } => format!("running:{pid}"),
+        PtySessionState::Detached { pid } => format!("detached:{pid}"),
+        PtySessionState::Exited { exit_code } => match exit_code {
+            Some(code) => format!("exited:{code}"),
+            None => "exited".into(),
+        },
+        PtySessionState::Failed { reason } => format!("failed:{reason}"),
+    }
+}
+
+fn pty_session_dto(view: impetus_client::PtySessionView) -> PtySessionDto {
+    PtySessionDto {
+        pty_id: view.pty_id,
+        owner_session_id: view.owner_session_id.to_string(),
+        state: pty_state_label(&view.state),
+        command: view.command,
+        cols: view.cols,
+        rows: view.rows,
+    }
+}
+
+/// Spawn a daemon-owned PTY bound to `session_id` (IPC v12 ownership).
+#[tauri::command]
+pub async fn pty_start(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    command: String,
+    args: Option<Vec<String>>,
+    working_dir: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> CommandResult<PtySessionDto> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    let command = command.trim();
+    if command.is_empty() {
+        return Err(CommandError::new("command must not be empty"));
+    }
+    let working_dir = working_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    let view = client
+        .pty_start(
+            session_id,
+            command.to_owned(),
+            args.unwrap_or_default(),
+            working_dir,
+            cols,
+            rows,
+        )
+        .await?;
+    Ok(pty_session_dto(view))
+}
+
+#[tauri::command]
+pub async fn pty_attach(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    pty_id: u64,
+) -> CommandResult<PtySessionDto> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    let view = client.pty_attach(session_id, pty_id).await?;
+    Ok(pty_session_dto(view))
+}
+
+#[tauri::command]
+pub async fn pty_input(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    pty_id: u64,
+    data: Vec<u8>,
+) -> CommandResult<()> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    if data.is_empty() {
+        return Ok(());
+    }
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    client.pty_input(session_id, pty_id, &data).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pty_output(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    pty_id: u64,
+    max_bytes: Option<usize>,
+) -> CommandResult<PtyOutputDto> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    let chunk = client.pty_output(session_id, pty_id, max_bytes).await?;
+    Ok(PtyOutputDto {
+        pty_id: chunk.pty_id,
+        data: chunk.data,
+        dropped_total: chunk.dropped_total,
+        eof: chunk.eof,
+    })
+}
+
+#[tauri::command]
+pub async fn pty_resize(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    pty_id: u64,
+    cols: u16,
+    rows: u16,
+) -> CommandResult<()> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    if cols == 0 || rows == 0 {
+        return Err(CommandError::new("cols and rows must be > 0"));
+    }
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    client.pty_resize(session_id, pty_id, cols, rows).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pty_detach(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    pty_id: u64,
+) -> CommandResult<()> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    client.pty_detach(session_id, pty_id).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pty_terminate(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    pty_id: u64,
+) -> CommandResult<()> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    client.pty_terminate(session_id, pty_id).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pty_status(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    pty_id: u64,
+) -> CommandResult<PtySessionDto> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    let view = client.pty_status(session_id, pty_id).await?;
+    Ok(pty_session_dto(view))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

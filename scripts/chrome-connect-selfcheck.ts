@@ -112,12 +112,9 @@ check("topbar Connect / Start daemon + status", () => {
   }
 });
 
-check("rail foot exposes Connect when offline", () => {
-  if (!rail.includes("rail-connect") || !rail.includes("onConnect")) {
-    throw new Error("SessionRail foot missing Connect");
-  }
-  if (!rail.includes("onStartDaemon") || !rail.includes("daemonReachable")) {
-    throw new Error("SessionRail missing Start daemon path");
+check("rail does not duplicate Start / Connect", () => {
+  if (rail.includes("rail-connect") || rail.includes("onStartDaemon")) {
+    throw new Error("SessionRail must not duplicate topbar Start/Connect");
   }
 });
 

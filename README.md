@@ -81,7 +81,7 @@ cd ../impetus && cargo run -p impetusd
 pnpm tauri dev
 ```
 
-Socket: `$IMPETUS_SOCKET` or
+Socket: `$IMPETUS_SOCKET` (ignored if under `/tmp/impetus-*` smoke paths) or
 `~/Library/Application Support/Impetus/harness.sock`.
 
 ## Keyboard shortcuts

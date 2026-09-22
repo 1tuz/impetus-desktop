@@ -1,0 +1,41 @@
+.shell {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  height: 100vh;
+  background: var(--bg);
+}
+
+.shell-acrylic {
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .shell-acrylic {
+    background: var(--surface);
+  }
+}
+
+.shell-label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--faint);
+  font-weight: var(--font-medium);
+}
+
+.shell-faint {
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+.shell-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: color-mix(in srgb, #000 72%, transparent);
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}

@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # PR CI: skip full debuginfo — faster compile, same assertions.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect:
+    name: Detect changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      frontend: ${{ steps.scope.outputs.frontend }}
+      rust: ${{ steps.scope.outputs.rust }}
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      security: ${{ steps.scope.outputs.security }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Selector unit tests
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci-affected.sh scripts/tests/ci-affected.sh
+          ./scripts/tests/ci-affected.sh
+      - id: scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin "${{ github.base_ref || 'main' }}"
+          export BASE_REF="origin/${{ github.base_ref || 'main' }}"
+          ./scripts/ci-affected.sh | tee /tmp/scope.txt
+          while IFS= read -r line; do
+            echo "$line" >> "$GITHUB_OUTPUT"
+          done < /tmp/scope.txt
+
+  frontend:
+    name: Frontend
+    needs: detect
+    if: needs.detect.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+
+  macos:
+    name: macOS
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: macos-14
+    timeout-minutes: 25
+    # Sibling layout matches local path dep:
+    #   src-tauri/Cargo.toml → ../../impetus/crates/impetus-client
+    defaults:
+      run:
+        working-directory: impetus-desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: impetus-desktop
+      - uses: actions/checkout@v7
+        with:
+          repository: 1tuz/impetus
+          path: impetus
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: impetus-desktop/src-tauri
+          shared-key: ci-macos
+          cache-targets: "true"
+      - name: Clippy
+        run: cargo clippy --lib --bins -- -D warnings
+      - name: Test
+        run: cargo test --lib --bins
+
+  linux:
+    name: Linux
+    needs: detect
+    if: needs.detect.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: impetus-desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: impetus-desktop
+      - uses: actions/checkout@v7
+        with:
+          repository: 1tuz/impetus
+          path: impetus
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt
+      - name: Install Linux Tauri system deps
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+        working-directory: .
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: impetus-desktop/src-tauri
+          shared-key: ci-linux
+          cache-targets: "true"
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check
+        run: cargo check
+
+  security:
+    name: Security
+    needs: detect
+    if: needs.detect.outputs.security == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: impetus-desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: impetus-desktop
+      - uses: actions/checkout@v7
+        with:
+          repository: 1tuz/impetus
+          path: impetus
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: impetus-desktop/src-tauri
+          shared-key: ci-linux-security
+          cache-targets: "false"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - run: cargo audit
+      - run: cargo deny --config ../deny.toml check advisories bans sources licenses
+
+  # Aggregator for branch protection: require only this job name so skipped
+  # scoped jobs (docs-only / no-security / no-frontend) do not block merge.
+  gate:
+    name: Gate
+    if: always()
+    needs: [detect, frontend, macos, linux, security]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require successful applicable jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
+          echo "detect=${{ needs.detect.result }}"
+          echo "frontend=${{ needs.frontend.result }}"
+          echo "macos=${{ needs.macos.result }}"
+          echo "linux=${{ needs.linux.result }}"
+          echo "security=${{ needs.security.result }}"
+          ok "${{ needs.detect.result }}"
+          ok "${{ needs.frontend.result }}"
+          ok "${{ needs.macos.result }}"
+          ok "${{ needs.linux.result }}"
+          ok "${{ needs.security.result }}"
+          echo "CI gate passed"

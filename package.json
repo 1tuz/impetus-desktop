@@ -1,0 +1,36 @@
+{
+  "name": "impetus-desktop",
+  "version": "0.1.0",
+  "description": "Impetus desktop client — thin shell over harness IPC",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "prepare": "svelte-kit sync || echo ''",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "test": "node --experimental-strip-types scripts/attach-menu-selfcheck.ts && node --experimental-strip-types scripts/theme-pack-selfcheck.ts && node --experimental-strip-types scripts/harness-ipc-selfcheck.ts && node --experimental-strip-types scripts/chrome-connect-selfcheck.ts",
+    "verify": "pnpm check && pnpm test",
+    "tauri": "tauri"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@internationalized/date": "^3.12.4",
+    "@lucide/svelte": "^1.47.0",
+    "@tauri-apps/api": "^2",
+    "bits-ui": "^2.19.2"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.65.1",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2",
+    "svelte": "^5.56.3",
+    "svelte-check": "^4.6.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}

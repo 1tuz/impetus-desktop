@@ -22,7 +22,7 @@ Sibling of the terminal harness: [`impetus`](../impetus)
 
 <p align="center">
   <img src="./assets/readme/app-chrome.png" width="100%"
-       alt="Impetus Desktop chrome: session rail, empty transcript, floating composer">
+       alt="Impetus Desktop: New Chat rail, Start daemon topbar, Ask mode composer">
 </p>
 
 ## Why a thin shell

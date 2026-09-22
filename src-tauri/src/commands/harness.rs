@@ -42,8 +42,7 @@ fn default_app_support_socket() -> String {
 /// GUI: sock file exists, nothing listens, Start spawns into a dead endpoint.
 fn is_ephemeral_smoke_socket(path: &str) -> bool {
     let p = path.trim();
-    p.starts_with("/tmp/impetus-")
-        || (p.starts_with("/var/folders/") && p.contains("impetus"))
+    p.starts_with("/tmp/impetus-") || (p.starts_with("/var/folders/") && p.contains("impetus"))
 }
 
 fn default_socket_path() -> String {
@@ -463,8 +462,7 @@ fn resolve_impetusd_bin() -> CommandResult<PathBuf> {
     }
 
     // CARGO_MANIFEST_DIR = src-tauri; sibling layout matches impetus-client path-dep.
-    let sibling_root =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../impetus/target");
+    let sibling_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../impetus/target");
     for rel in ["release/impetusd", "debug/impetusd"] {
         let candidate = sibling_root.join(rel);
         if candidate.is_file() {
@@ -863,7 +861,9 @@ mod tests {
 
     #[test]
     fn ephemeral_smoke_socket_detect() {
-        assert!(is_ephemeral_smoke_socket("/tmp/impetus-cr-0LbE/harness.sock"));
+        assert!(is_ephemeral_smoke_socket(
+            "/tmp/impetus-cr-0LbE/harness.sock"
+        ));
         assert!(!is_ephemeral_smoke_socket("/tmp/stable-harness.sock"));
     }
 

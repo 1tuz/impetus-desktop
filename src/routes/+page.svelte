@@ -1147,13 +1147,10 @@
     {workspaceRoot}
     {busy}
     {connected}
-    {daemonReachable}
     onCreateSession={() => void createSession()}
     onOpenWorkspace={() => void pickWorkspaceFolder()}
     onSelectSession={selectSession}
     onPrefs={() => (showPrefs = !showPrefs)}
-    onConnect={() => void connect()}
-    onStartDaemon={() => void startDaemon()}
   />
 
   <main class="stage">

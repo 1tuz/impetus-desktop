@@ -163,12 +163,11 @@ check("rail New Chat + workspace folder-plus like Cursor", () => {
   }
 });
 
-check("Connect lives in topbar + rail foot (not primary nav)", () => {
+check("Connect / Start daemon only in topbar (not rail)", () => {
   const rail = readFileSync(
     join(root, "src/lib/components/SessionRail.svelte"),
     "utf8",
   );
-  // Must not be a primary rail-nav item; foot Connect when offline is OK.
   const navSlice = rail.slice(
     rail.indexOf('class="rail-nav"'),
     rail.indexOf('class="rail-section"'),
@@ -176,8 +175,8 @@ check("Connect lives in topbar + rail foot (not primary nav)", () => {
   if (navSlice.includes(">Connect<") || navSlice.includes("onConnect")) {
     throw new Error("Connect still primary rail-nav action");
   }
-  if (!rail.includes("rail-foot") || !rail.includes("rail-connect")) {
-    throw new Error("rail foot must expose compact Connect when offline");
+  if (rail.includes("rail-connect") || rail.includes("onStartDaemon")) {
+    throw new Error("rail must not duplicate Start/Connect — topbar only");
   }
   const top = readFileSync(
     join(root, "src/lib/components/AppTopbar.svelte"),

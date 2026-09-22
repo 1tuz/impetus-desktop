@@ -54,8 +54,8 @@ sibling [`impetus`](../impetus) (`TODO.md`, `ARCHITECTURE.md`).
 ## Done (do not re-litigate)
 
 - Connect / probe / setup wizard (no auto-TCC)
-- Topbar Connected/Offline + Connect / Start daemon / Disconnect; rail foot
-  Start/Connect when offline
+- Topbar Connected/Offline + Connect / Start daemon / Disconnect (single CTA;
+  rail foot is Preferences only)
 - New Chat ⌘N + workspace folder-plus / ⌘O (`pick_folder`)
 - Attach files ⌘G (`pick_files` real paths) + image paste/drop thumbs
 - `cancel_session` + Composer Stop

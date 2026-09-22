@@ -17,13 +17,10 @@
     workspaceRoot = "",
     busy = false,
     connected = false,
-    daemonReachable = false,
     onCreateSession,
     onOpenWorkspace,
     onSelectSession,
     onPrefs,
-    onConnect,
-    onStartDaemon,
   }: {
     open?: boolean;
     sessions?: SessionDto[];
@@ -31,13 +28,10 @@
     workspaceRoot?: string;
     busy?: boolean;
     connected?: boolean;
-    daemonReachable?: boolean;
     onCreateSession: () => void;
     onOpenWorkspace: () => void;
     onSelectSession: (id: string) => void;
     onPrefs: () => void;
-    onConnect: () => void;
-    onStartDaemon: () => void;
   } = $props();
 
   function persist(next: boolean) {
@@ -161,19 +155,6 @@
     </div>
 
     <div class="rail-foot">
-      {#if !connected}
-        <Button
-          variant="ghost"
-          size="sm"
-          class="rail-connect"
-          disabled={busy}
-          title={daemonReachable ? "Connect to impetusd" : "Start impetusd"}
-          onclick={daemonReachable ? onConnect : onStartDaemon}
-        >
-          <Icon name="plug" size={14} />
-          {daemonReachable ? "Connect" : "Start"}
-        </Button>
-      {/if}
       <Button
         variant="ghost"
         size="icon"
@@ -383,10 +364,5 @@
     align-items: center;
     justify-content: flex-end;
     gap: var(--space-1);
-  }
-
-  :global(.rail-connect) {
-    margin-right: auto;
-    color: var(--muted);
   }
 </style>

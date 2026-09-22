@@ -49,6 +49,14 @@ pub fn run() {
             commands::save_temp_image,
             commands::read_image_bytes,
             commands::open_external,
+            commands::pty_start,
+            commands::pty_attach,
+            commands::pty_input,
+            commands::pty_output,
+            commands::pty_resize,
+            commands::pty_detach,
+            commands::pty_terminate,
+            commands::pty_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

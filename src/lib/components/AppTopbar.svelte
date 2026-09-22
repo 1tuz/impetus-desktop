@@ -9,10 +9,12 @@
     busy = false,
     daemonReachable = false,
     socketPath = "",
+    terminalOpen = false,
     onToggleAppearance,
     onConnect,
     onDisconnect,
     onStartDaemon,
+    onToggleTerminal,
   }: {
     selectedSessionId?: string;
     themeId?: string;
@@ -20,10 +22,12 @@
     busy?: boolean;
     daemonReachable?: boolean;
     socketPath?: string;
+    terminalOpen?: boolean;
     onToggleAppearance: () => void;
     onConnect: () => void;
     onDisconnect: () => void;
     onStartDaemon: () => void;
+    onToggleTerminal: () => void;
   } = $props();
 
   const light = $derived(isLightTheme(themeId));
@@ -58,6 +62,16 @@
     </div>
   </div>
   <div class="actions">
+    <Button
+      variant="ghost"
+      size="icon"
+      title={terminalOpen ? "Hide terminal" : "Show terminal"}
+      aria-label={terminalOpen ? "Hide terminal" : "Show terminal"}
+      aria-pressed={terminalOpen}
+      onclick={onToggleTerminal}
+    >
+      <Icon name="terminal" size={16} />
+    </Button>
     {#if connected}
       <Button
         variant="ghost"

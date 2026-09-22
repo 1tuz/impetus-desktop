@@ -40,14 +40,21 @@ stays replaceable: reconnect, resume, keep working.
 
 <p align="center">
   <img src="./assets/readme/request-path.svg" width="100%"
-       alt="Desktop UI invokes HarnessClient over Unix socket IPC v7 to impetusd">
+       alt="Desktop UI invokes HarnessClient over Unix socket IPC v12 to impetusd">
 </p>
 
 ```text
-Desktop UI ──invoke──▶ HarnessClient ──Unix IPC──▶ impetusd
+Desktop UI ──invoke──▶ HarnessClient ──Unix IPC v12──▶ impetusd
 ```
 
-Open work (IPC rebase, live stream, approvals, modes): [TODO.md](TODO.md).
+**PTY / terminal:** unblocked. Thin xterm.js panel (`TerminalPanel`) talks to
+daemon PTY via Tauri `pty_*` commands (`session_id` ownership). No Desktop-local
+PTY spawn. Sibling harness must be at pinned
+[`.github/impetus-revision`](.github/impetus-revision) (IPC v12; Impetus PR #319).
+Toggle: topbar terminal icon or Ctrl+`. Remaining: attach picker + live smoke
+checklist in [TODO.md](TODO.md).
+
+Open work (approvals polish, modes, models): [TODO.md](TODO.md).
 
 ## Permissions
 
@@ -95,6 +102,7 @@ Listed in **Preferences** only (no chrome clutter). Defaults include:
 | ⌘G | Attach files |
 | ⌘↵ | Send |
 | ⌘B | Toggle session rail |
+| Ctrl+` | Toggle terminal |
 | ⌘, | Preferences |
 | ⌘⇧T | Cycle theme pack |
 

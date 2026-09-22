@@ -64,7 +64,8 @@ On `src-tauri/Cargo.toml` or `src-tauri/Cargo.lock` changes, also run
 - Rust/security jobs check out sibling [`1tuz/impetus`](https://github.com/1tuz/impetus)
   next to this repo so `src-tauri` path dep
   `../../impetus/crates/impetus-client` resolves (same layout as local
-  `Documents/projects/{impetus,impetus-desktop}`).
+  `Documents/projects/{impetus,impetus-desktop}`). Checkout `ref` =
+  `.github/impetus-revision` (IPC pin; currently v12 PTY).
 - Preview scope: `BASE_REF=origin/main ./scripts/ci-affected.sh`
 - Selector self-check: `./scripts/tests/ci-affected.sh`
 - No pages/release workflows in this repo (desktop ships as DMG/local build).

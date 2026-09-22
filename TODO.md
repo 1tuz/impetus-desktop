@@ -49,6 +49,21 @@ sibling [`impetus`](../impetus) (`TODO.md`, `ARCHITECTURE.md`).
 - [x] Git branch picker under composer (Cursor-like; `git_*` Tauri commands).
 - [ ] DMG install smoke checklist in README (App + Applications symlink).
 
+### Terminal / PTY — unblocked (IPC v12)
+
+Harness: real PTY IPC (`PtyStart`/`Attach`/`Input`/`Output`/`Resize`/
+`Detach`/`Terminate`/`Status`) with `session_id` ownership. Desktop wires
+thin xterm.js over Tauri → `HarnessClient` (no Desktop-only PTY).
+
+- [x] Tauri cmds: `pty_start` / `attach` / `input` / `output` / `resize` /
+      `detach` / `terminate` / `status` (all pass `session_id`).
+- [x] Minimal `TerminalPanel` (xterm.js): Start zsh, poll output, input,
+      Detach/Kill. Toggle: topbar icon or Ctrl+`.
+- [ ] Live attach of previously detached `pty_id` UI (API wired; no picker yet).
+- [ ] Live-daemon smoke: Start → type → Detach against `impetusd` at
+      `.github/impetus-revision` (PR #319 / IPC v12).
+  - Requires sibling `impetus` at pinned rev (path-dep); CloseRouter unrelated.
+
 ---
 
 ## Done (do not re-litigate)
@@ -96,6 +111,7 @@ Shown in Preferences. Bound in `+page.svelte` `onKeydown`.
 | ⌘↵ | Send |
 | ⌘K | Focus prompt |
 | ⌘B | Toggle session rail |
+| Ctrl+` | Toggle terminal (daemon PTY) |
 | ⌘, / ⌃⇧/ | Preferences |
 | ⌘⇧T | Cycle theme pack |
 | ⌘L | Clear local transcript |
@@ -115,7 +131,8 @@ Shown in Preferences. Bound in `+page.svelte` `onKeydown`.
 | Sibling [impetus/TODO.md](../impetus/TODO.md) | Daemon + TUI backlog |
 | Issue [#310](https://github.com/1tuz/impetus/issues/310) | GUI adapter track |
 
-Inventory refresh: 2026-09-22 (desktop rebased to main IPC v7).
+Inventory refresh: 2026-09-22 (desktop PTY over Impetus IPC **v12**).
 
 NOTE: P0 checkboxes marked for code wire-up. Confirm once against a live
-`impetusd` before treating as production-ready.
+`impetusd` before treating as production-ready. Harness pin:
+[`.github/impetus-revision`](.github/impetus-revision) (IPC v12 PTY ownership).

@@ -22,7 +22,8 @@
     | "sparkles"
     | "keyboard"
     | "sun"
-    | "moon";
+    | "moon"
+    | "terminal";
 
   /** Lucide-compatible 24×24 stroke paths. */
   const REGISTRY: Record<IconName, string[]> = {
@@ -106,6 +107,10 @@
       "m19.07 4.93-1.41 1.41",
     ],
     moon: ["M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"],
+    terminal: [
+      "M12 19h8",
+      "m4 17 6-6-6-6",
+    ],
   };
 
   const warned = new Set<string>();

@@ -95,6 +95,12 @@ expect self frontend true "$out"
 expect self rust true "$out"
 expect self docs_only false "$out"
 
+# --- frontend selfcheck script → pnpm test ---
+out="$(scope 'scripts/event-reducer-selfcheck.ts')"
+expect selfcheck frontend true "$out"
+expect selfcheck rust false "$out"
+expect selfcheck docs_only false "$out"
+
 # --- workflow change → full compile scope ---
 out="$(scope '.github/workflows/ci.yml')"
 expect workflow frontend true "$out"

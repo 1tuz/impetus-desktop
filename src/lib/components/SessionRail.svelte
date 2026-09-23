@@ -1,5 +1,14 @@
 <script lang="ts">
   import { Button, EmptyState, Icon } from "$lib/components/ui";
+  import {
+    displaySessionTitle,
+    loadArchivedSessionIds,
+    loadRemovedSessionIds,
+    loadSessionTitles,
+    removeSessionFromList,
+    saveSessionTitle,
+    setSessionArchived,
+  } from "$lib/sessionRailPrefs";
   import "$lib/components/shell.css";
 
   type SessionDto = {
@@ -17,6 +26,7 @@
     workspaceRoot = "",
     busy = false,
     connected = false,
+    daemonReachable = false,
     onCreateSession,
     onOpenWorkspace,
     onSelectSession,
@@ -28,11 +38,19 @@
     workspaceRoot?: string;
     busy?: boolean;
     connected?: boolean;
+    daemonReachable?: boolean;
     onCreateSession: () => void;
     onOpenWorkspace: () => void;
     onSelectSession: (id: string) => void;
     onPrefs: () => void;
   } = $props();
+
+  let titles = $state<Record<string, string>>(loadSessionTitles());
+  let archivedIds = $state<Set<string>>(loadArchivedSessionIds());
+  let removedIds = $state<Set<string>>(loadRemovedSessionIds());
+  let showArchived = $state(false);
+  let renamingId = $state<string | null>(null);
+  let renameDraft = $state("");
 
   function persist(next: boolean) {
     open = next;
@@ -52,9 +70,74 @@
       ? (workspaceRoot.split("/").filter(Boolean).pop() ?? workspaceRoot)
       : "",
   );
+
+  const visibleSessions = $derived(
+    sessions.filter((s) => {
+      if (removedIds.has(s.id)) return false;
+      const archived = archivedIds.has(s.id);
+      return showArchived ? archived : !archived;
+    }),
+  );
+
+  const archivedCount = $derived(
+    sessions.filter((s) => archivedIds.has(s.id) && !removedIds.has(s.id)).length,
+  );
+
+  function startRename(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    renamingId = id;
+    renameDraft = displaySessionTitle(id, titles);
+  }
+
+  function commitRename() {
+    if (!renamingId) return;
+    titles = saveSessionTitle(renamingId, renameDraft);
+    renamingId = null;
+    renameDraft = "";
+  }
+
+  function cancelRename() {
+    renamingId = null;
+    renameDraft = "";
+  }
+
+  function archiveSession(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    archivedIds = setSessionArchived(id, true);
+    if (selectedSessionId === id) selectedSessionId = "";
+  }
+
+  function unarchiveSession(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    archivedIds = setSessionArchived(id, false);
+  }
+
+  function deleteFromList(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    // Presentation only — Core has no DeleteSession IPC yet.
+    const ok = window.confirm(
+      "Remove this chat from the list?\n(Daemon session stays until Core ships delete.)",
+    );
+    if (!ok) return;
+    removedIds = removeSessionFromList(id);
+    if (selectedSessionId === id) selectedSessionId = "";
+  }
+
+  /** Autofocus rename field when it mounts. */
+  function focusOnMount(node: HTMLInputElement) {
+    queueMicrotask(() => {
+      node.focus();
+      node.select();
+    });
+  }
 </script>
 
 <aside class="rail shell-acrylic" class:collapsed={!open} aria-label="Sessions">
+  <!-- Toggle stays top-left whether open or collapsed — same hit target. -->
   <div class="rail-head">
     {#if open}
       <Button
@@ -124,31 +207,117 @@
 
       <div class="section-head sessions-head">
         <span class="shell-label">Chats</span>
+        {#if archivedCount > 0}
+          <button
+            type="button"
+            class="archive-toggle"
+            onclick={() => (showArchived = !showArchived)}
+          >
+            {showArchived ? "Active" : `Archived (${archivedCount})`}
+          </button>
+        {/if}
       </div>
       <div class="session-list selectable">
-        {#if sessions.length === 0}
+        {#if visibleSessions.length === 0}
           <EmptyState
             icon="message-square"
-            title="No chats"
-            description={workspaceLabel
-              ? "New Chat starts a session here."
-              : "Open a workspace, then New Chat."}
+            title={showArchived ? "No archived chats" : "No chats"}
+            description={showArchived
+              ? "Unarchive from the row actions."
+              : workspaceLabel
+                ? "New Chat starts a session here."
+                : "Open a workspace, then New Chat."}
             compact
           />
         {:else}
-          {#each sessions as session, i (session.id)}
-            <button
-              type="button"
+          {#each visibleSessions as session, i (session.id)}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
               class="session"
               class:on={selectedSessionId === session.id}
-              onclick={() => onSelectSession(session.id)}
             >
-              <Icon name="message-square" size={14} />
-              <span class="id mono">
-                {#if i < 9}<span class="idx">{i + 1}</span>{/if}{session.id.slice(0, 8)}
-              </span>
-              <span class="meta">{relativeTime(session.updated_at_unix_ms)}</span>
-            </button>
+              {#if renamingId === session.id}
+                <div class="session-rename">
+                  <Icon name="message-square" size={14} />
+                  <input
+                    class="rename-input mono"
+                    type="text"
+                    aria-label="Chat name"
+                    bind:value={renameDraft}
+                    use:focusOnMount
+                    onkeydown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitRename();
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        cancelRename();
+                      }
+                    }}
+                    onblur={() => commitRename()}
+                  />
+                </div>
+              {:else}
+                <button
+                  type="button"
+                  class="session-main"
+                  onclick={() => {
+                    onSelectSession(session.id);
+                  }}
+                >
+                  <Icon name="message-square" size={14} />
+                  <span class="id" title={session.id}>
+                    {#if i < 9 && !showArchived}<span class="idx">{i + 1}</span>{/if}{displaySessionTitle(
+                      session.id,
+                      titles,
+                    )}
+                  </span>
+                </button>
+                <div class="session-actions">
+                  <button
+                    type="button"
+                    class="act"
+                    title="Rename"
+                    aria-label="Rename chat"
+                    onclick={(e) => startRename(session.id, e)}
+                  >
+                    <Icon name="pencil" size={13} />
+                  </button>
+                  {#if showArchived}
+                    <button
+                      type="button"
+                      class="act"
+                      title="Unarchive"
+                      aria-label="Unarchive chat"
+                      onclick={(e) => unarchiveSession(session.id, e)}
+                    >
+                      <Icon name="archive" size={13} />
+                    </button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="act"
+                      title="Archive"
+                      aria-label="Archive chat"
+                      onclick={(e) => archiveSession(session.id, e)}
+                    >
+                      <Icon name="archive" size={13} />
+                    </button>
+                  {/if}
+                  <button
+                    type="button"
+                    class="act danger"
+                    title="Remove from list"
+                    aria-label="Remove chat from list"
+                    onclick={(e) => deleteFromList(session.id, e)}
+                  >
+                    <Icon name="trash" size={13} />
+                  </button>
+                </div>
+                <span class="meta">{relativeTime(session.updated_at_unix_ms)}</span>
+              {/if}
+            </div>
           {/each}
         {/if}
       </div>
@@ -158,6 +327,21 @@
       <Button
         variant="ghost"
         size="icon"
+        class="rail-prefs"
+        title="Preferences"
+        aria-label="Preferences"
+        onclick={onPrefs}
+      >
+        <Icon name="settings" size={16} />
+      </Button>
+    </div>
+  {:else}
+    <!-- Collapsed: prefs stays bottom-left under expand (same left column). -->
+    <div class="rail-foot collapsed-foot">
+      <Button
+        variant="ghost"
+        size="icon"
+        class="rail-prefs"
         title="Preferences"
         aria-label="Preferences"
         onclick={onPrefs}
@@ -176,21 +360,22 @@
     flex-direction: column;
     min-height: 0;
     transition: width var(--motion-fast) var(--ease);
+    position: relative;
   }
 
   .rail.collapsed {
     width: var(--space-12);
     min-width: var(--space-12);
-    overflow: hidden;
   }
 
   .rail-head {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: var(--space-2);
     min-height: var(--space-10);
-    padding: var(--space-2) var(--space-3);
+    padding: var(--space-2);
+    padding-left: var(--space-2);
   }
 
   .rail.collapsed .rail-head {
@@ -199,7 +384,8 @@
   }
 
   :global(.rail-toggle),
-  :global(.rail-expand) {
+  :global(.rail-expand),
+  :global(.rail-prefs) {
     flex-shrink: 0;
     color: var(--muted);
   }
@@ -208,7 +394,7 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
-    padding: 0 var(--space-2) var(--space-2);
+    padding: 0 var(--space-2) var(--space-1);
   }
 
   .nav-item {
@@ -253,8 +439,8 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    padding: var(--space-2) var(--space-2) 0;
-    gap: var(--space-2);
+    padding: 0 var(--space-2) 0;
+    gap: var(--space-1);
   }
 
   .section-head {
@@ -263,11 +449,26 @@
     justify-content: space-between;
     gap: var(--space-2);
     padding: 0 var(--space-2) 0 var(--space-3);
-    min-height: var(--space-8);
+    min-height: var(--space-7);
   }
 
   .sessions-head {
-    margin-top: var(--space-1);
+    margin-top: var(--space-2);
+  }
+
+  .archive-toggle {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+
+  .archive-toggle:hover {
+    color: var(--text);
   }
 
   :global(.ws-add) {
@@ -298,7 +499,7 @@
 
   .ws-empty {
     margin: 0;
-    padding: 0 var(--space-3);
+    padding: var(--space-1) var(--space-3);
     color: var(--faint);
     font-size: var(--text-xs);
   }
@@ -312,57 +513,140 @@
   }
 
   .session {
-    display: flex;
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     align-items: center;
-    gap: var(--space-2);
-    text-align: left;
-    background: transparent;
-    border: 0;
-    color: var(--text);
-    padding: var(--space-2) var(--space-3);
+    gap: 2px;
     border-radius: var(--radius-md);
-    font: inherit;
-    cursor: pointer;
+    min-height: var(--space-8);
+    padding-right: 4px;
   }
 
-  .session:hover {
-    background: var(--elevated);
-  }
-
+  .session:hover,
   .session.on {
     background: var(--elevated);
   }
 
-  .session :global(.ui-icon) {
+  .session-main {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    margin: 0;
+    padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .session-main :global(.ui-icon) {
     color: var(--muted);
     flex-shrink: 0;
   }
 
   .session .id {
-    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: var(--text-sm);
+    font-family: var(--font-mono, ui-monospace, Menlo, monospace);
   }
 
   .session .idx {
     color: var(--faint);
     margin-right: var(--space-1);
+    font-family: inherit;
   }
 
   .session .meta {
     color: var(--faint);
     font-size: var(--text-xs);
+    white-space: nowrap;
+    padding-right: 2px;
+    flex-shrink: 0;
+  }
+
+  .session-actions {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-shrink: 0;
+    opacity: 0.72;
+  }
+
+  .session:hover .session-actions,
+  .session.on .session-actions {
+    opacity: 1;
+  }
+
+  .act {
+    display: inline-grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .act:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .act.danger:hover {
+    color: var(--danger, #f87171);
+  }
+
+  .rename-input {
+    flex: 1;
+    min-width: 0;
+    margin: 0 var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-sm);
+  }
+
+  .session-rename {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+    min-width: 0;
+  }
+
+  .session-rename :global(.ui-icon) {
+    color: var(--muted);
     flex-shrink: 0;
   }
 
   .rail-foot {
-    padding: var(--space-2) var(--space-3);
+    padding: var(--space-2);
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: var(--space-1);
+    margin-top: auto;
+  }
+
+  .collapsed-foot {
+    justify-content: center;
+    padding: var(--space-2) 0 var(--space-3);
   }
 </style>

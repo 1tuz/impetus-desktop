@@ -5,6 +5,8 @@
   background: var(--bg);
 }
 
+/* Right panel lives inside .stage-row — do not add a third shell column. */
+
 .shell-acrylic {
   background: color-mix(in srgb, var(--surface) 72%, transparent);
   backdrop-filter: blur(16px);
@@ -38,4 +40,19 @@
   display: grid;
   place-items: center;
   padding: var(--space-6);
+}
+
+.stage-row {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+}
+
+.stage-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  min-height: 0;
 }

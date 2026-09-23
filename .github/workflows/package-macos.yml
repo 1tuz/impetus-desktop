@@ -1,0 +1,80 @@
+# Optional packaging smoke — NOT required by branch-protection Gate.
+# Builds macOS .app/.dmg with bundled impetusd sidecar.
+
+name: Package macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  IMPETUS_REF: 7dc456a0062fd61c9d47d1abe2fed76fec56a12c
+
+jobs:
+  package:
+    name: Build app+dmg
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: impetus-desktop
+      - uses: actions/checkout@v7
+        with:
+          repository: 1tuz/impetus
+          ref: ${{ env.IMPETUS_REF }}
+          path: impetus
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: impetus-desktop/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            impetus
+            impetus-desktop/src-tauri
+          shared-key: package-macos
+          cache-targets: "true"
+      - name: Build impetusd (release)
+        working-directory: impetus
+        run: cargo build -p impetusd --release
+      - name: Install frontend deps
+        working-directory: impetus-desktop
+        run: pnpm install --frozen-lockfile
+      - name: Prepare sidecar + build bundles
+        working-directory: impetus-desktop
+        run: |
+          set -euo pipefail
+          bash scripts/prepare-impetusd-sidecar.sh
+          # beforeBuildCommand also prepares sidecar; binary already staged.
+          pnpm tauri build --bundles app,dmg
+      - name: Assert bundled impetusd
+        working-directory: impetus-desktop
+        run: |
+          set -euo pipefail
+          app="$(find src-tauri/target/release/bundle/macos -name '*.app' -maxdepth 1 | head -1)"
+          test -n "$app"
+          test -x "$app/Contents/MacOS/impetusd"
+          echo "bundled: $app/Contents/MacOS/impetusd"
+          file "$app/Contents/MacOS/impetusd"
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: impetus-desktop-dmg
+          path: impetus-desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error

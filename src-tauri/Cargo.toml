@@ -24,6 +24,7 @@ uuid = { version = "1", features = ["serde"] }
 rfd = "0.15"
 # Path relative to src-tauri/ (sibling repo under Documents/projects)
 impetus-client = { path = "../../impetus/crates/impetus-client" }
+impetus-daemon-control = { path = "../../impetus/crates/impetus-daemon-control" }
 
 [profile.release]
 codegen-units = 1

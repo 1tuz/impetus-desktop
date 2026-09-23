@@ -17,7 +17,6 @@
   import PreferencesPanel from "$lib/PreferencesPanel.svelte";
   import { type AttachActionId } from "$lib/attachMenu";
   import {
-    DEFAULT_AGENT_MODE,
     DEFAULT_PROMPT_INTENT,
     cyclePromptIntent,
     isAgentModeId,
@@ -32,6 +31,7 @@
   } from "$lib/chatDrop";
   import {
     attachmentFromBlob,
+    attachmentFromFilePath,
     attachmentFromPath,
     ensureImageFile,
     extFromMime,
@@ -40,16 +40,23 @@
     mergeAttachmentsIntoPrompt,
     partitionPaths,
     revokeAttachments,
+    shouldUploadArtifact,
     toPreviewableImage,
+    userMsgWithAttachments,
     type ComposerAttachment,
   } from "$lib/composerAttachments";
+  import { type HarnessEvent, type Msg, type Role } from "$lib/harnessEventReducer";
+  import { createSessionTranscript } from "$lib/session.svelte";
   import AppTopbar from "$lib/components/AppTopbar.svelte";
   import Composer from "$lib/components/Composer.svelte";
+  import RightPanel from "$lib/components/RightPanel.svelte";
   import SessionRail from "$lib/components/SessionRail.svelte";
   import SetupWizard from "$lib/components/SetupWizard.svelte";
   import TerminalPanel from "$lib/components/TerminalPanel.svelte";
   import Transcript from "$lib/components/Transcript.svelte";
   import "$lib/components/shell.css";
+
+  type ArtifactRefDto = { id: string; byte_count: number };
 
   type HelloInfo = {
     version: number;
@@ -77,7 +84,17 @@
     socket_exists: boolean;
     reachable: boolean;
     detail: string;
+    provider_kind: string;
+    failure_kind?: string;
   };
+
+  type RuntimePhase =
+    | "starting"
+    | "connected"
+    | "reconnecting"
+    | "offline"
+    | "incompatible"
+    | "failed";
 
   type ApprovalDetailDto = {
     approval_id: string;
@@ -88,27 +105,16 @@
     estimated_scope: string | null;
   };
 
-  /** Durable harness Event (subset used by the shell). */
-  type HarnessEvent = {
-    sequence: number;
-    session_id: string;
-    payload: {
-      type: string;
-      data: Record<string, unknown>;
-    };
-  };
-
   type SessionEventsPayload = {
     session_id: string;
     events: HarnessEvent[];
   };
 
-  type Role = "system" | "user" | "assistant" | "tool";
-  type Msg = { id: string; role: Role; text: string; ts: number; runId?: string };
-
   const SETUP_KEY = "impetus.desktop.setup.v1";
   const RAIL_KEY = "impetus.desktop.rail";
   const WORKSPACE_KEY = "impetus.desktop.workspace";
+  const PROVIDER_PROFILE_KEY = "impetus.desktop.provider_profile";
+  const ACP_PROFILE_KEY = "impetus.desktop.acp_profile";
 
   /** Vite browser has no Tauri IPC — invoke() throws TypeError. */
   function inTauriShell(): boolean {
@@ -116,6 +122,7 @@
   }
 
   let connected = $state(false);
+  let runtimePhase = $state<RuntimePhase>("offline");
   let socketPath = $state("");
   let sessions = $state<SessionDto[]>([]);
   let selectedSessionId = $state("");
@@ -123,12 +130,22 @@
     typeof localStorage !== "undefined" ? localStorage.getItem(WORKSPACE_KEY) ?? "" : "",
   );
   let promptText = $state("");
-  let approvalId = $state("");
-  let approvalSummary = $state("");
-  let pendingApproval = $state(false);
   let busy = $state(false);
-  let turnActive = $state(false);
-  let messages = $state<Msg[]>([]);
+  const session = createSessionTranscript();
+  let providerKind = $state("unknown");
+  let ipcVersion = $state<number | null>(null);
+  let ipcWarn = $state<string | null>(null);
+  let sessionModelSummary = $state("");
+  let providerProfilePath = $state(
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem(PROVIDER_PROFILE_KEY) ?? ""
+      : "",
+  );
+  let acpProfilePath = $state(
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem(ACP_PROFILE_KEY) ?? ""
+      : "",
+  );
   let promptIntent = $state<PromptIntentId>(DEFAULT_PROMPT_INTENT);
   let eventsUnlisten: UnlistenFn | null = null;
   let railOpen = $state(
@@ -141,7 +158,6 @@
   let promptEl = $state<HTMLTextAreaElement | null>(null);
   let attachOpen = $state(false);
   let modeOpen = $state(false);
-  let agentMode = $state<AgentModeId>(DEFAULT_AGENT_MODE);
   let dropActive = $state(false);
   let attachments = $state<ComposerAttachment[]>([]);
 
@@ -150,6 +166,9 @@
   let themeId = $state(DEFAULT_THEME_ID);
   let showPrefs = $state(false);
   let terminalOpen = $state(false);
+  let rightPanelOpen = $state(true);
+  let rightPanelTab = $state<"files" | "review" | "agents">("files");
+
 
   function applyCurrentTheme() {
     const next = applyThemePrefs(packId, appearance);
@@ -158,30 +177,23 @@
     themeId = next.themeId;
   }
 
-  function uid() {
-    return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  }
-
-  function push(role: Role, text: string, runId?: string) {
-    messages = [...messages, { id: uid(), role, text, ts: Date.now(), runId }];
+  function scrollTranscript() {
     queueMicrotask(() => {
       if (transcriptEl) transcriptEl.scrollTop = transcriptEl.scrollHeight;
     });
   }
 
-  function appendAssistantChunk(runId: string, text: string) {
-    const last = messages[messages.length - 1];
-    if (last && last.role === "assistant" && last.runId === runId) {
-      messages = [
-        ...messages.slice(0, -1),
-        { ...last, text: last.text + text, ts: Date.now() },
-      ];
-    } else {
-      push("assistant", text, runId);
-    }
-    queueMicrotask(() => {
-      if (transcriptEl) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  function push(
+    role: Role,
+    text: string,
+    runId?: string,
+    msgAttachments?: Msg["attachments"],
+  ) {
+    session.push(role, text, {
+      ...(runId !== undefined ? { runId } : {}),
+      ...(msgAttachments !== undefined ? { attachments: msgAttachments } : {}),
     });
+    scrollTranscript();
   }
 
   function errorMessage(err: unknown): string {
@@ -192,12 +204,12 @@
     return String(err);
   }
 
-  async function startLiveSubscribe(sessionId: string) {
+  async function startLiveSubscribe(sessionId: string, afterSeq: number) {
     if (!inTauriShell() || !sessionId) return;
     try {
       await invoke("subscribe_session_events", {
         sessionId,
-        afterSeq: 0,
+        afterSeq,
       });
     } catch (err) {
       push("system", `subscribe: ${errorMessage(err)}`);
@@ -217,32 +229,30 @@
     if (!inTauriShell() || !sessionId) return;
     try {
       const mode = await invoke<string>("get_execution_mode", { sessionId });
-      if (isAgentModeId(mode)) agentMode = mode;
+      if (isAgentModeId(mode)) session.agentMode = mode;
     } catch {
       /* fresh session / older daemon — keep UI default */
     }
   }
 
   async function changeAgentMode(id: AgentModeId) {
-    agentMode = id;
+    session.agentMode = id;
     if (!inTauriShell() || !connected || !selectedSessionId) return;
     try {
       const confirmed = await invoke<string>("set_execution_mode", {
         sessionId: selectedSessionId,
         mode: id,
       });
-      if (isAgentModeId(confirmed)) agentMode = confirmed;
-      push("system", `mode · ${confirmed}`);
+      if (isAgentModeId(confirmed)) session.agentMode = confirmed;
     } catch (err) {
-      push("system", `mode: ${errorMessage(err)}`);
+      push("system", `Could not change mode: ${errorMessage(err)}`);
     }
   }
 
-  async function surfaceApproval(id: string, summary: string) {
-    approvalId = id;
-    approvalSummary = summary;
-    pendingApproval = true;
-    push("tool", summary ? `approval · ${summary}` : `approval · ${id.slice(0, 8)}…`);
+  async function fetchApprovalDetail(id: string, summary: string) {
+    session.approvalId = id;
+    session.approvalSummary = summary;
+    session.pendingApproval = true;
     if (!inTauriShell() || !selectedSessionId) return;
     try {
       const detail = await invoke<ApprovalDetailDto>("get_approval_detail", {
@@ -256,7 +266,7 @@
           : "",
         detail.estimated_scope ?? "",
       ].filter(Boolean);
-      if (bits.length) approvalSummary = bits.join(" · ");
+      if (bits.length) session.approvalSummary = bits.join(" · ");
       if (detail.diff_preview) {
         push("tool", detail.diff_preview.slice(0, 800));
       }
@@ -266,109 +276,19 @@
   }
 
   function handleHarnessEvent(event: HarnessEvent) {
-    if (event.session_id && selectedSessionId && event.session_id !== selectedSessionId) {
-      return;
-    }
-    const { type, data } = event.payload;
-    const state = typeof data?.state === "string" ? data.state : "";
-
-    if (type === "agent") {
-      const runId = String(data.run_id ?? "");
-      const text = String(data.text ?? "");
-      if (state === "chunk" && text) {
-        appendAssistantChunk(runId, text);
-        turnActive = true;
-      } else if (state === "final" && text) {
-        const last = messages[messages.length - 1];
-        if (last && last.role === "assistant" && last.runId === runId) {
-          messages = [
-            ...messages.slice(0, -1),
-            { ...last, text, ts: Date.now() },
-          ];
-        } else {
-          push("assistant", text, runId);
-        }
+    const effects = session.applyEvent(event, selectedSessionId);
+    for (const effect of effects) {
+      if (effect.kind === "approval") {
+        void fetchApprovalDetail(effect.id, effect.summary);
       }
-      return;
     }
-
-    if (type === "run") {
-      if (state === "started") turnActive = true;
-      if (
-        state === "completed" ||
-        state === "failed" ||
-        state === "cancelled" ||
-        state === "interrupted_unknown"
-      ) {
-        turnActive = false;
-        if (state === "failed") {
-          push("system", `run failed · ${String(data.reason ?? "")}`);
-        } else if (state === "cancelled") {
-          push("system", "run cancelled");
-        }
-      }
-      return;
-    }
-
-    if (type === "tool") {
-      const name = String(data.name ?? data.tool_name ?? "tool");
-      if (state === "started") {
-        push("tool", `${name}…`);
-      } else if (state === "finished") {
-        push("tool", `${name} · ${String(data.summary ?? "done")}`);
-      } else if (state === "observed") {
-        push("tool", `${name} · ${String(data.preview ?? data.outcome ?? "")}`);
-      } else if (state === "deferred") {
-        const id = String(data.approval_id ?? "");
-        if (id) void surfaceApproval(id, `${name} needs approval`);
-      }
-      return;
-    }
-
-    if (type === "approval") {
-      const request = data.request as { id?: string; reason?: string } | undefined;
-      if (state === "requested" && request?.id) {
-        void surfaceApproval(request.id, request.reason ?? "approval required");
-      } else if (state === "resolved") {
-        pendingApproval = false;
-        approvalSummary = "";
-      }
-      return;
-    }
-
-    if (type === "intent") {
-      const text = String(data.text ?? "");
-      if (text && !messages.some((m) => m.role === "user" && m.text === text)) {
-        push("user", text);
-      }
-      return;
-    }
-
-    if (type === "session") {
-      // SessionEvent is externally tagged (not state-tagged).
-      const modeChanged = data.execution_mode_changed as { mode?: string } | undefined;
-      if (modeChanged && typeof modeChanged.mode === "string" && isAgentModeId(modeChanged.mode)) {
-        agentMode = modeChanged.mode;
-      }
-      return;
-    }
-
-    if (type === "notice") {
-      if (typeof data === "object" && data) {
-        if ("runtime" in data) {
-          const runtime = data.runtime as { message?: string };
-          if (runtime?.message) push("system", runtime.message);
-        } else if ("policy_denied" in data) {
-          const denied = data.policy_denied as { reason?: string };
-          push("system", `policy denied · ${denied?.reason ?? ""}`);
-        }
-      }
-      return;
-    }
+    scrollTranscript();
   }
 
   function onSessionEvents(payload: SessionEventsPayload) {
-    if (payload.session_id !== selectedSessionId) return;
+    if (payload.session_id && selectedSessionId && payload.session_id !== selectedSessionId) {
+      return;
+    }
     for (const event of payload.events) {
       handleHarnessEvent(event);
     }
@@ -393,30 +313,210 @@
         socket_exists: false,
         reachable: false,
         detail: "IPC unavailable in browser",
+        provider_kind: "unknown",
       };
       socketPath = probe.socket_path;
       return probe;
     }
     probe = await invoke<DaemonProbe>("probe_daemon");
     socketPath = probe.socket_path;
+    if (probe.provider_kind) providerKind = probe.provider_kind;
     return probe;
+  }
+
+  async function connectInner(): Promise<boolean> {
+    ipcVersion = null;
+    try {
+      const hello = await invoke<HelloInfo>("harness_hello");
+      connected = true;
+      socketPath = hello.socket_path;
+      ipcVersion = hello.version;
+      ipcWarn = null;
+      const capsLower = hello.capabilities.map((c) => c.toLowerCase());
+      if (capsLower.some((c) => c.includes("incompatible"))) {
+        ipcWarn = "Incompatible";
+        runtimePhase = "incompatible";
+        connected = false;
+        return false;
+      }
+      runtimePhase = "connected";
+      // Status lives in topbar (Connected · v14 · mock). Do not dump socket/caps into chat.
+      await refreshSessions();
+      return true;
+    } catch (err) {
+      const msg = errorMessage(err);
+      if (/incompatible|version/i.test(msg)) {
+        ipcWarn = "Incompatible";
+        runtimePhase = "incompatible";
+      }
+      throw err;
+    }
   }
 
   async function connect(): Promise<boolean> {
     if (!inTauriShell()) return false;
     let ok = false;
     await withBusy("connect", async () => {
-      const hello = await invoke<HelloInfo>("harness_hello");
-      connected = true;
-      socketPath = hello.socket_path;
-      push(
-        "system",
-        `connected · ${hello.socket_path}\ncaps: ${hello.capabilities.join(", ") || "(none)"}`,
-      );
-      await refreshSessions();
-      ok = true;
+      ok = await connectInner();
     });
     return ok;
+  }
+
+  function profileArgs(): { provider: string; acp: string } {
+    const provider =
+      providerProfilePath.trim() ||
+      (typeof localStorage !== "undefined"
+        ? localStorage.getItem(PROVIDER_PROFILE_KEY) ?? ""
+        : "");
+    const acp =
+      acpProfilePath.trim() ||
+      (typeof localStorage !== "undefined"
+        ? localStorage.getItem(ACP_PROFILE_KEY) ?? ""
+        : "");
+    return { provider, acp };
+  }
+
+  /** Prefer ensure_runtime; fall back to start_daemon if command not registered yet. */
+  async function invokeEnsureOrStart(
+    provider: string,
+    acp: string,
+  ): Promise<DaemonProbe> {
+    const args = {
+      providerProfile: provider || null,
+      acpProfile: acp || null,
+    };
+    try {
+      return await invoke<DaemonProbe>("ensure_runtime", args);
+    } catch {
+      // Coordinator lands ensure_runtime; older builds only have start_daemon.
+      return await invoke<DaemonProbe>("start_daemon", args);
+    }
+  }
+
+  async function ensureRuntimeThenConnect(
+    opts: { reconnecting?: boolean } = {},
+  ): Promise<boolean> {
+    if (!inTauriShell()) {
+      runtimePhase = "offline";
+      push("system", "Web preview — Runtime needs Impetus Desktop.app");
+      return false;
+    }
+    const { provider, acp } = profileArgs();
+    if (provider && acp) {
+      runtimePhase = "failed";
+      push(
+        "system",
+        "config: set only one of provider profile or ACP profile in Preferences",
+      );
+      return false;
+    }
+
+    runtimePhase = opts.reconnecting ? "reconnecting" : "starting";
+    let ok = false;
+    await withBusy("runtime", async () => {
+      let p = await runProbe();
+      if (p.failure_kind === "incompatible") {
+        runtimePhase = "incompatible";
+        ipcWarn = "Incompatible";
+        push("system", p.detail || "Runtime protocol incompatible");
+        return;
+      }
+      if (!p.reachable) {
+        try {
+          p = await invokeEnsureOrStart(provider, acp);
+          probe = p;
+          socketPath = p.socket_path;
+          providerKind = p.provider_kind || "unknown";
+          // Keep ensure detail out of chat — topbar shows Connected / mock badge.
+        } catch (err) {
+          const msg = errorMessage(err);
+          if (/incompatible|version/i.test(msg)) {
+            runtimePhase = "incompatible";
+            ipcWarn = "Incompatible";
+          } else {
+            runtimePhase = "failed";
+          }
+          push("system", `runtime: ${msg}`);
+          return;
+        }
+      }
+      if (p.failure_kind === "incompatible") {
+        runtimePhase = "incompatible";
+        ipcWarn = "Incompatible";
+        push("system", p.detail || "Runtime protocol incompatible");
+        return;
+      }
+      if (!p.reachable) {
+        runtimePhase = "failed";
+        push("system", "Runtime unreachable after ensure");
+        return;
+      }
+      try {
+        ok = await connectInner();
+        if (!ok && runtimePhase !== "incompatible") {
+          runtimePhase = "failed";
+        }
+      } catch (err) {
+        if (runtimePhase !== "incompatible") {
+          runtimePhase = "failed";
+        }
+        throw err;
+      }
+    });
+    if (!ok && runtimePhase === "starting") {
+      runtimePhase = "offline";
+    }
+    if (!ok && runtimePhase === "reconnecting") {
+      runtimePhase = "offline";
+    }
+    return ok;
+  }
+
+  async function reconnect() {
+    const resumeId = selectedSessionId;
+    const resumeSeq = session.lastSeq;
+    if (connected) {
+      try {
+        await stopLiveSubscribe();
+        await invoke("disconnect");
+      } catch {
+        /* ignore */
+      }
+      connected = false;
+    }
+    const ok = await ensureRuntimeThenConnect({ reconnecting: true });
+    if (!ok || !resumeId || !inTauriShell()) return;
+    // Keep transcript; resume live cursor from lastSeq (do not wipe via activateSession).
+    selectedSessionId = resumeId;
+    await syncExecutionMode(resumeId);
+    await startLiveSubscribe(resumeId, resumeSeq);
+    try {
+      await refreshSessions();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Recovery alias — Prefs Advanced "Restart Runtime". */
+  async function restartRuntime() {
+    if (connected) {
+      try {
+        await stopLiveSubscribe();
+        await invoke("disconnect");
+      } catch {
+        /* ignore */
+      }
+      connected = false;
+      sessions = [];
+      selectedSessionId = "";
+      sessionModelSummary = "";
+      session.pendingApproval = false;
+      session.approvalSummary = "";
+      session.turnActive = false;
+      ipcVersion = null;
+      ipcWarn = null;
+    }
+    await ensureRuntimeThenConnect();
   }
 
   async function disconnect() {
@@ -425,29 +525,17 @@
       await stopLiveSubscribe();
       await invoke("disconnect");
       connected = false;
+      runtimePhase = "offline";
       sessions = [];
       selectedSessionId = "";
-      pendingApproval = false;
-      approvalSummary = "";
-      turnActive = false;
-      push("system", "disconnected");
+      sessionModelSummary = "";
+      session.pendingApproval = false;
+      session.approvalSummary = "";
+      session.turnActive = false;
+      providerKind = "unknown";
+      ipcVersion = null;
+      ipcWarn = null;
     });
-  }
-
-  async function startDaemon() {
-    if (!inTauriShell()) {
-      push("system", "Web preview — Start daemon needs Impetus Desktop.app");
-      return;
-    }
-    await withBusy("start daemon", async () => {
-      const p = await invoke<DaemonProbe>("start_daemon");
-      probe = p;
-      socketPath = p.socket_path;
-      push("system", p.detail);
-    });
-    if (probe?.reachable && !connected) {
-      await connect();
-    }
   }
 
   const daemonReachable = $derived(probe?.reachable ?? false);
@@ -458,7 +546,7 @@
     sessions = list;
     if (selectedSessionId && !list.some((s) => s.id === selectedSessionId)) {
       selectedSessionId = "";
-      pendingApproval = false;
+      session.pendingApproval = false;
     }
   }
 
@@ -472,9 +560,12 @@
       return;
     }
     if (!connected) {
-      const ok = await connect();
+      const ok = await ensureRuntimeThenConnect();
       if (!ok) {
-        push("system", "impetusd unreachable — start the daemon, then try New Chat again");
+        push(
+          "system",
+          "Runtime offline — try Reconnect in the topbar, or Preferences → Restart Runtime",
+        );
         return;
       }
     }
@@ -487,7 +578,7 @@
         }
         const picked = await invoke<string | null>("pick_folder");
         if (!picked) {
-          push("system", "no folder selected");
+          push("system", "No folder selected");
           return;
         }
         workspaceRoot = picked;
@@ -495,14 +586,15 @@
       }
       const id = await invoke<string>("create_session", { workspaceRoot: root });
       selectedSessionId = id;
-      messages = [];
-      pendingApproval = false;
-      approvalSummary = "";
-      turnActive = false;
-      push("system", `session ${id.slice(0, 8)}… · ${root}`);
+      session.reset();
+      session.pendingApproval = false;
+      session.approvalSummary = "";
+      const gen = session.bumpSubscribeGen();
       await refreshSessions();
+      if (gen !== session.subscribeGen) return;
       await syncExecutionMode(id);
-      await startLiveSubscribe(id);
+      if (gen !== session.subscribeGen) return;
+      await startLiveSubscribe(id, 0);
     });
   }
 
@@ -586,6 +678,11 @@
     attachments = [];
   }
 
+
+  function attLabel(atts: ComposerAttachment[]): string {
+    return atts.map((a) => a.path ?? a.name).join("\n");
+  }
+
   async function sendPrompt() {
     const raw = promptText.trim();
     if (!raw && attachments.length === 0) return;
@@ -599,9 +696,12 @@
     }
 
     if (!connected) {
-      const ok = await connect();
+      const ok = await ensureRuntimeThenConnect();
       if (!ok) {
-        push("system", "impetusd unreachable — start the daemon, then send again");
+        push(
+          "system",
+          "Runtime offline — try Reconnect, or Preferences → Restart Runtime",
+        );
         return;
       }
     }
@@ -611,23 +711,65 @@
       if (!selectedSessionId) return;
     }
 
-    // Images: harness is text-only for now — paths land in the prompt body.
+    // Prefer path-based upload_artifact for large/file chips; else path-in-prompt.
     // Execution mode is daemon-owned (set_execution_mode); no prompt banners.
-    const body = stripModePrefix(mergeAttachmentsIntoPrompt(raw, attachments));
+    const toUpload = attachments.filter(
+      (a) => a.path && shouldUploadArtifact(a),
+    );
+    const rest = attachments.filter((a) => !toUpload.includes(a));
+    const body = stripModePrefix(mergeAttachmentsIntoPrompt(raw, rest));
     const intent = promptIntent;
-    push("user", body);
+    const savedPrompt = promptText;
+    const savedAttachments = attachments;
+    const display = body || (toUpload.length ? `(artifact ×${toUpload.length})` : "");
+    const sent = userMsgWithAttachments(display, savedAttachments);
+    push("user", sent.text, undefined, sent.attachments);
     promptText = "";
-    clearAttachments();
+    attachments = [];
+    let sendOk = false;
     await withBusy("send", async () => {
+      let uploaded: ArtifactRefDto[] = [];
+      for (const att of toUpload) {
+        if (!att.path) continue;
+        uploaded.push(
+          await invoke<ArtifactRefDto>("upload_artifact", {
+            sessionId: selectedSessionId,
+            path: att.path,
+            contentType: att.mime || null,
+            workspaceRoot: workspaceRoot.trim() || null,
+          }),
+        );
+      }
+      // Core SendPrompt takes one artifact; extras named in text until multi-ref lands.
+      const artifact = uploaded.length ? uploaded[uploaded.length - 1]! : null;
+      const extraNote =
+        uploaded.length > 1
+          ? `\n[artifacts ×${uploaded.length}: ${uploaded.map((a) => a.id.slice(0, 8)).join(", ")}]`
+          : "";
       await invoke<string>("send_prompt", {
         sessionId: selectedSessionId,
-        text: body,
+        text: (body || (artifact ? attLabel(toUpload) : "")) + extraNote,
         intent,
+        artifact,
       });
+      sendOk = true;
       // Streaming arrives via harness://events — do not fake status-as-assistant.
-      if (intent === "prompt" || intent === "steer") turnActive = true;
+      if (intent === "prompt" || intent === "steer" || intent === "follow_up") {
+        session.turnActive = true;
+      }
       await refreshStatus();
     });
+    if (sendOk) {
+      revokeAttachments(savedAttachments);
+    } else {
+      // Restore composer; drop optimistic user bubble on failure.
+      promptText = savedPrompt;
+      attachments = savedAttachments;
+      const last = session.messages[session.messages.length - 1];
+      if (last && last.role === "user" && last.text === display) {
+        session.messages = session.messages.slice(0, -1);
+      }
+    }
   }
 
   async function refreshStatus() {
@@ -638,27 +780,32 @@
       });
       connected = status.connected;
       socketPath = status.socket_path || socketPath;
+      if (status.connected) {
+        if (runtimePhase !== "incompatible") runtimePhase = "connected";
+      } else if (runtimePhase === "connected") {
+        runtimePhase = "offline";
+      }
       if (status.runtime_status) {
-        pendingApproval = status.runtime_status.includes("AwaitingApproval");
+        session.pendingApproval = status.runtime_status.includes("AwaitingApproval");
       }
     });
   }
 
   async function resolve(accept: boolean) {
-    if (!selectedSessionId || !approvalId.trim()) {
+    if (!selectedSessionId || !session.approvalId.trim()) {
       push("system", "need session + approval id");
       return;
     }
     await withBusy("approval", async () => {
       await invoke("resolve_approval", {
         sessionId: selectedSessionId,
-        approvalId: approvalId.trim(),
+        approvalId: session.approvalId.trim(),
         accept,
       });
       push("tool", accept ? "approval accepted" : "approval denied");
-      pendingApproval = false;
-      approvalId = "";
-      approvalSummary = "";
+      session.pendingApproval = false;
+      session.approvalId = "";
+      session.approvalSummary = "";
       await refreshStatus();
     });
   }
@@ -666,12 +813,13 @@
   function finishSetup() {
     localStorage.setItem(SETUP_KEY, "done");
     showSetup = false;
-    push("system", "ready — connect to impetusd, then prompt");
+    if (!connected) void ensureRuntimeThenConnect();
   }
 
   function skipSetup() {
     localStorage.setItem(SETUP_KEY, "done");
     showSetup = false;
+    void ensureRuntimeThenConnect();
   }
 
   /** Explicit user action only — never call from onMount / setup auto-flow. */
@@ -700,7 +848,7 @@
   }
 
   function clearTranscript() {
-    messages = [];
+    session.reset();
   }
 
   function setRailOpen(next: boolean) {
@@ -724,7 +872,10 @@
     if (images.length) await addImageFiles(images);
     if (other.length) {
       const names = other.map((f) => f.name).filter(Boolean);
-      promptText = appendPathsToPrompt(promptText, names);
+      const chips = other.map((f) =>
+        attachmentFromFilePath(f.name, f.size, f.type || undefined),
+      );
+      attachments = [...attachments, ...chips];
       push(
         "system",
         names.length === 1 ? `attached · ${names[0]}` : `attached · ${names.length} files`,
@@ -742,7 +893,10 @@
           const { images, other } = partitionPaths(paths);
           if (images.length) await addImagePaths(images);
           if (other.length) {
-            promptText = appendPathsToPrompt(promptText, other);
+            attachments = [
+              ...attachments,
+              ...other.map((p) => attachmentFromFilePath(p)),
+            ];
             push(
               "system",
               other.length === 1
@@ -774,7 +928,7 @@
       const status = await invoke<string>("cancel_session", {
         sessionId: selectedSessionId,
       });
-      turnActive = false;
+      session.turnActive = false;
       push("system", `cancelled · ${status}`);
       await refreshStatus();
     } catch (err) {
@@ -789,18 +943,21 @@
   }
 
   async function activateSession(id: string) {
+    const gen = session.bumpSubscribeGen();
     selectedSessionId = id;
-    pendingApproval = false;
-    approvalSummary = "";
-    approvalId = "";
-    turnActive = false;
-    messages = [];
+    session.pendingApproval = false;
+    session.approvalSummary = "";
+    session.approvalId = "";
+    session.reset();
     if (!connected || !inTauriShell()) return;
     await syncExecutionMode(id);
-    await startLiveSubscribe(id);
+    if (gen !== session.subscribeGen) return;
+    // Fresh session view: replay from 0 once, then cursor advances via lastSeq.
+    await startLiveSubscribe(id, 0);
   }
 
   function selectSession(id: string) {
+    if (!id) sessionModelSummary = "";
     void activateSession(id);
   }
 
@@ -822,7 +979,9 @@
       return;
     }
     if (id === "model") {
-      push("system", "Model: Auto (daemon default)");
+      // Model picker lives in Composer (Provider/Model/Reasoning) — not Attach.
+      focusPrompt();
+      return;
     }
   }
 
@@ -857,7 +1016,10 @@
     const { images, other } = partitionPaths(disp.paths);
     if (images.length) await addImagePaths(images);
     if (other.length) {
-      promptText = appendPathsToPrompt(promptText, other);
+      attachments = [
+        ...attachments,
+        ...other.map((p) => attachmentFromFilePath(p)),
+      ];
       push(
         "system",
         other.length === 1
@@ -915,7 +1077,7 @@
         event.preventDefault();
         return;
       }
-      if (turnActive) {
+      if (session.turnActive) {
         event.preventDefault();
         void cancelTurn();
       }
@@ -1079,11 +1241,7 @@
       showSetup = true;
       void runProbe();
     } else {
-      void runProbe().then((p) => {
-        if (p?.reachable) {
-          void connect();
-        }
-      });
+      void ensureRuntimeThenConnect();
     }
 
     return () => {
@@ -1103,7 +1261,7 @@
   {probe}
   {busy}
   onProbe={runProbe}
-  onConnect={connect}
+  onConnect={ensureRuntimeThenConnect}
   onFinish={finishSetup}
   onSkip={skipSetup}
 />
@@ -1114,13 +1272,17 @@
   bind:appearance
   bind:themeId
   bind:workspaceRoot
+  bind:providerProfilePath
+  bind:acpProfilePath
   {socketPath}
   {connected}
   {busy}
+  {providerKind}
   onOpenSecurity={openSecuritySettings}
   onResetSetup={resetSetupWizard}
-  onConnect={connect}
+  onConnect={() => void ensureRuntimeThenConnect()}
   onDisconnect={disconnect}
+  onRestartRuntime={() => void restartRuntime()}
 />
 
 <div
@@ -1160,6 +1322,7 @@
     {workspaceRoot}
     {busy}
     {connected}
+    {daemonReachable}
     onCreateSession={() => void createSession()}
     onOpenWorkspace={() => void pickWorkspaceFolder()}
     onSelectSession={selectSession}
@@ -1172,37 +1335,44 @@
       {themeId}
       {connected}
       {busy}
-      {daemonReachable}
+      {runtimePhase}
       {socketPath}
+      {providerKind}
+      {ipcVersion}
+      {ipcWarn}
       {terminalOpen}
+      {sessionModelSummary}
       onToggleAppearance={toggleAppearance}
-      onConnect={() => void connect()}
       onDisconnect={() => void disconnect()}
-      onStartDaemon={() => void startDaemon()}
+      onReconnect={() => void reconnect()}
       onToggleTerminal={() => (terminalOpen = !terminalOpen)}
     />
 
+    <div class="stage-row">
+      <div class="stage-main">
     <Transcript
-      {messages}
+      messages={session.messages}
       {connected}
+      {runtimePhase}
       hasSession={!!selectedSessionId}
       bind:scrollEl={transcriptEl}
     />
 
     <Composer
       bind:promptText
-      bind:approvalId
-      bind:agentMode
+      bind:approvalId={session.approvalId}
+      bind:agentMode={session.agentMode}
       bind:promptIntent
       bind:attachments
       bind:attachOpen
       bind:modeOpen
       {workspaceRoot}
-      {approvalSummary}
-      {pendingApproval}
+      approvalSummary={session.approvalSummary}
+      pendingApproval={session.pendingApproval}
       {busy}
-      {turnActive}
+      turnActive={session.turnActive}
       {connected}
+      {runtimePhase}
       {selectedSessionId}
       dropActive={dropActive}
       bind:promptEl
@@ -1214,7 +1384,23 @@
       onPasteImages={(files) => void addImageFiles(files)}
       onRemoveAttachment={removeAttachment}
       onModeChange={(id) => void changeAgentMode(id)}
+      onModelChanged={(sel) => {
+        const parts = [sel.provider_id, sel.model_id];
+        if (sel.reasoning_effort) parts.push(sel.reasoning_effort);
+        if (sel.service_tier) parts.push(sel.service_tier);
+        sessionModelSummary = parts.filter(Boolean).join(" · ");
+      }}
     />
+      </div>
+      <RightPanel
+        bind:open={rightPanelOpen}
+        bind:activeTab={rightPanelTab}
+        sessionId={selectedSessionId}
+        {workspaceRoot}
+        {connected}
+        {busy}
+      />
+    </div>
 
     <TerminalPanel
       bind:open={terminalOpen}

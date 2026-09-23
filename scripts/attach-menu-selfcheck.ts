@@ -163,11 +163,12 @@ check("rail New Chat + workspace folder-plus like Cursor", () => {
   }
 });
 
-check("Connect / Start daemon only in topbar (not rail)", () => {
+check("Runtime status in topbar only (not rail)", () => {
   const rail = readFileSync(
     join(root, "src/lib/components/SessionRail.svelte"),
     "utf8",
   );
+  // Must not be a primary rail-nav item; foot Connect also removed (issue #1).
   const navSlice = rail.slice(
     rail.indexOf('class="rail-nav"'),
     rail.indexOf('class="rail-section"'),
@@ -176,17 +177,30 @@ check("Connect / Start daemon only in topbar (not rail)", () => {
     throw new Error("Connect still primary rail-nav action");
   }
   if (rail.includes("rail-connect") || rail.includes("onStartDaemon")) {
-    throw new Error("rail must not duplicate Start/Connect — topbar only");
+    throw new Error("rail must not duplicate topbar Start/Connect");
   }
   const top = readFileSync(
     join(root, "src/lib/components/AppTopbar.svelte"),
     "utf8",
   );
-  if (!top.includes("onConnect") || !top.includes("connected")) {
-    throw new Error("topbar must show connected status + Connect action");
+  if (!top.includes("Runtime") || !top.includes("runtimePhase")) {
+    throw new Error("topbar must show Runtime phase status");
   }
-  if (!top.includes("Start daemon") || !top.includes("onStartDaemon")) {
-    throw new Error("topbar must offer Start daemon when offline");
+  for (const phase of [
+    "Starting",
+    "Connected",
+    "Reconnecting",
+    "Offline",
+    "Incompatible",
+    "Failed",
+  ]) {
+    if (!top.includes(phase)) {
+      throw new Error(`topbar missing Runtime phase label ${phase}`);
+    }
+  }
+  // Primary Start daemon CTA removed — recovery via Prefs Restart / Reconnect.
+  if (top.includes(">Start daemon<")) {
+    throw new Error("topbar must not show primary Start daemon CTA");
   }
 });
 

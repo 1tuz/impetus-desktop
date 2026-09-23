@@ -2,12 +2,13 @@
   import AttachMenu from "$lib/components/AttachMenu.svelte";
   import BranchSelect from "$lib/components/BranchSelect.svelte";
   import ModeSelect from "$lib/components/ModeSelect.svelte";
-  import { Button, Icon, Input } from "$lib/components/ui";
+  import ModelSelect from "$lib/components/ModelSelect.svelte";
+  import { Button, Icon } from "$lib/components/ui";
   import type { AttachActionId } from "$lib/attachMenu";
   import type { AgentModeId, PromptIntentId } from "$lib/agentModes";
   import { promptIntentLabel } from "$lib/agentModes";
   import type { ComposerAttachment } from "$lib/composerAttachments";
-  import { collectPastedImages, readImagesFromClipboardApi } from "$lib/composerAttachments";
+  import { collectPastedImages, formatBytes, readImagesFromClipboardApi } from "$lib/composerAttachments";
   import "$lib/components/shell.css";
 
   let {
@@ -22,6 +23,13 @@
     busy = false,
     turnActive = false,
     connected = false,
+    runtimePhase = "offline" as
+      | "starting"
+      | "connected"
+      | "reconnecting"
+      | "offline"
+      | "incompatible"
+      | "failed",
     selectedSessionId = "",
     attachOpen = $bindable(false),
     modeOpen = $bindable(false),
@@ -35,6 +43,8 @@
     onPasteImages,
     onRemoveAttachment,
     onModeChange,
+    onModelChanged,
+    onModelError,
   }: {
     promptText?: string;
     approvalId?: string;
@@ -47,6 +57,13 @@
     busy?: boolean;
     turnActive?: boolean;
     connected?: boolean;
+    runtimePhase?:
+      | "starting"
+      | "connected"
+      | "reconnecting"
+      | "offline"
+      | "incompatible"
+      | "failed";
     selectedSessionId?: string;
     attachOpen?: boolean;
     modeOpen?: boolean;
@@ -60,6 +77,13 @@
     onPasteImages: (files: File[]) => void;
     onRemoveAttachment: (id: string) => void;
     onModeChange?: (id: AgentModeId) => void;
+    onModelChanged?: (selection: {
+      provider_id: string;
+      model_id: string;
+      reasoning_effort?: string | null;
+      service_tier?: string | null;
+    }) => void;
+    onModelError?: (message: string) => void;
   } = $props();
 
   // Gate Send only on IPC busy — Steer/FollowUp allowed while turn is active.
@@ -70,6 +94,10 @@
   const previewAtt = $derived(
     previewIndex !== null ? (attachments[previewIndex] ?? null) : null,
   );
+
+  function formatSize(n: number): string {
+    return formatBytes(n);
+  }
 
   function toggleAttach() {
     modeOpen = false;
@@ -204,12 +232,11 @@
     {#if approvalSummary}
       <span class="approval-summary" title={approvalSummary}>{approvalSummary}</span>
     {/if}
-    <Input
-      mono
-      placeholder={approvalId ? "approval id (auto)" : "approval uuid"}
-      bind:value={approvalId}
-      class="approval-field"
-    />
+    {#if approvalId}
+      <span class="approval-id mono" title={approvalId}>{approvalId.slice(0, 8)}…</span>
+    {:else}
+      <span class="approval-summary muted">waiting for approval id from daemon…</span>
+    {/if}
     <Button variant="ghost" size="sm" disabled={busy} onclick={() => onResolve(true)}>
       Accept
     </Button>
@@ -229,11 +256,16 @@
       onAction={onAttachAction}
       onMcpSelect={onMcpSelect}
     />
-    <div class="composer-pill" class:drop-active={dropActive}>
+    <div
+      class="composer-pill"
+      class:drop-active={dropActive}
+      class:is-offline={!connected}
+      aria-describedby={!connected ? "composer-offline-hint" : undefined}
+    >
       {#if attachments.length > 0}
-        <div class="attach-row" aria-label="Attached images">
+        <div class="attach-row" aria-label="Attachments">
           {#each attachments as att, i (att.id)}
-            <div class="thumb">
+            <div class="thumb" class:file={(att.kind ?? "image") === "file"}>
               {#if att.previewUrl}
                 <button
                   type="button"
@@ -245,7 +277,20 @@
                   <img src={att.previewUrl} alt={att.name} />
                 </button>
               {:else}
-                <span class="thumb-fallback" title={att.path ?? att.name}>{att.name}</span>
+                <button
+                  type="button"
+                  class="thumb-fallback"
+                  title={att.path ?? att.name}
+                  aria-label="Attached {att.name}"
+                  onclick={() => {
+                    if (att.previewUrl) openPreview(i);
+                  }}
+                >
+                  <span class="file-name">{att.name}</span>
+                  {#if att.sizeBytes != null}
+                    <span class="file-size">{formatSize(att.sizeBytes)}</span>
+                  {/if}
+                </button>
               {/if}
               <button
                 type="button"
@@ -288,7 +333,18 @@
         <textarea
           class="composer-input"
           rows="1"
-          placeholder={selectedSessionId ? "Send follow-up" : "Message Impetus…"}
+          placeholder={!connected
+            ? runtimePhase === "starting" || runtimePhase === "reconnecting"
+              ? "Draft a message… (Runtime connecting)"
+              : "Draft a message… (reconnects on send)"
+            : selectedSessionId
+              ? "Send follow-up"
+              : "Message Impetus…"}
+          aria-label={!connected
+            ? "Message Impetus — will reconnect on send if offline"
+            : selectedSessionId
+              ? "Send follow-up"
+              : "Message Impetus"}
           bind:value={promptText}
           bind:this={promptEl}
           onkeydown={(e) => {
@@ -314,8 +370,8 @@
             variant={canSend ? "primary" : "ghost"}
             size="icon"
             class="composer-send"
-            title={connected ? "Send" : "Send — connect first if offline"}
-            aria-label="Send"
+            title={connected ? "Send" : "Send — reconnects Runtime if offline"}
+            aria-label={connected ? "Send" : "Send (reconnects if offline)"}
             disabled={!canSend}
             onclick={onSend}
           >
@@ -324,8 +380,27 @@
         {/if}
       </div>
     </div>
+    {#if !connected}
+      <p id="composer-offline-hint" class="composer-offline-hint">
+        {#if runtimePhase === "starting" || runtimePhase === "reconnecting"}
+          Runtime connecting…
+        {:else if runtimePhase === "incompatible"}
+          Runtime incompatible — upgrade Desktop or impetusd.
+        {:else if runtimePhase === "failed"}
+          Runtime failed — Preferences → Restart Runtime, or send to reconnect.
+        {:else}
+          Runtime offline — Preferences → Restart Runtime, or send to reconnect.
+        {/if}
+      </p>
+    {/if}
     <div class="composer-meta">
-      <BranchSelect {workspaceRoot} />
+      <BranchSelect sessionId={selectedSessionId} />
+      <ModelSelect
+        connected={connected}
+        sessionId={selectedSessionId}
+        onError={onModelError}
+        onChanged={onModelChanged}
+      />
     </div>
   </div>
 </footer>
@@ -349,8 +424,10 @@
     font-size: var(--text-sm);
   }
 
-  :global(.approval-field) {
-    flex: 1;
+  .approval-id {
+    flex-shrink: 0;
+    color: var(--muted);
+    font-size: var(--text-sm);
   }
 
   .intent-chip {
@@ -401,6 +478,23 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
   }
 
+  /* Offline: still draftable (send auto-connects) — soft cue only. */
+  .composer-pill.is-offline {
+    border-color: color-mix(in srgb, var(--muted) 28%, var(--border));
+    background: color-mix(in srgb, var(--surface) 88%, var(--bg));
+  }
+
+  .composer-pill.is-offline .composer-input::placeholder {
+    color: var(--muted);
+  }
+
+  .composer-offline-hint {
+    margin: var(--space-2) var(--space-2) 0;
+    color: var(--muted);
+    font-size: var(--text-xs);
+    line-height: 1.4;
+  }
+
   .attach-row {
     display: flex;
     flex-wrap: wrap;
@@ -441,19 +535,43 @@
 
   .thumb-fallback {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: flex-start;
     justify-content: center;
+    gap: 2px;
     width: 100%;
     height: 100%;
-    padding: var(--space-1);
+    margin: 0;
+    padding: var(--space-1) var(--space-2);
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--elevated);
     color: var(--muted);
+    font: inherit;
     font-size: var(--text-xs);
+    text-align: left;
+    cursor: default;
+    overflow: hidden;
+  }
+
+  .thumb.file {
+    width: auto;
+    min-width: 88px;
+    max-width: 140px;
+  }
+
+  .file-name {
+    display: block;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-align: center;
+    white-space: nowrap;
+    color: var(--text);
+  }
+
+  .file-size {
+    color: var(--faint);
+    font-family: var(--font-mono, var(--mono));
   }
 
   .thumb-x {
@@ -620,7 +738,9 @@
     color: var(--bg);
   }
 
+  /* Disabled send stays visible (was nearly invisible at 0.35 + --muted). */
   :global(.composer-pill .composer-send:disabled) {
-    opacity: 0.35;
+    opacity: 0.55;
+    color: var(--muted);
   }
 </style>

@@ -16,6 +16,8 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_TERM_COLOR: always
+  # Keep in sync with .github/impetus-revision (detect job asserts equality).
+  IMPETUS_REF: 7dc456a0062fd61c9d47d1abe2fed76fec56a12c
 
 jobs:
   detect:
@@ -31,11 +33,23 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Assert impetus pin file matches workflow env
+        run: |
+          set -euo pipefail
+          file_ref="$(tr -d '[:space:]' < .github/impetus-revision)"
+          if [[ "$file_ref" != "${{ env.IMPETUS_REF }}" ]]; then
+            echo "impetus pin mismatch:"
+            echo "  .github/impetus-revision=$file_ref"
+            echo "  env.IMPETUS_REF=${{ env.IMPETUS_REF }}"
+            exit 1
+          fi
+          echo "impetus pin OK: $file_ref"
       - name: Selector unit tests
         run: |
           set -euo pipefail
           chmod +x scripts/ci-affected.sh scripts/tests/ci-affected.sh
           ./scripts/tests/ci-affected.sh
+
       - id: scope
         shell: bash
         run: |
@@ -81,19 +95,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: impetus-desktop
-      - name: Read Impetus pin
-        id: impetus_pin
-        working-directory: .
-        run: |
-          set -euo pipefail
-          ref="$(tr -d '[:space:]' < impetus-desktop/.github/impetus-revision)"
-          test -n "$ref"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           repository: 1tuz/impetus
+          ref: ${{ env.IMPETUS_REF }}
           path: impetus
-          ref: ${{ steps.impetus_pin.outputs.ref }}
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy
@@ -101,11 +107,20 @@ jobs:
         with:
           workspaces: impetus-desktop/src-tauri
           shared-key: ci-macos
+
           cache-targets: "true"
       - name: Clippy
         run: cargo clippy --lib --bins -- -D warnings
       - name: Test
         run: cargo test --lib --bins
+      # Fast wire presence — catch Tauri registration drift on Rust-only PRs.
+      - name: Wire selfchecks
+        working-directory: impetus-desktop
+        run: |
+          node --experimental-strip-types scripts/harness-ipc-selfcheck.ts
+          node --experimental-strip-types scripts/chrome-connect-selfcheck.ts
+          node --experimental-strip-types scripts/no-privilege-selfcheck.ts
+          node --experimental-strip-types scripts/extensions-selfcheck.ts
 
   linux:
     name: Linux
@@ -120,23 +135,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: impetus-desktop
-      - name: Read Impetus pin
-        id: impetus_pin
-        working-directory: .
-        run: |
-          set -euo pipefail
-          ref="$(tr -d '[:space:]' < impetus-desktop/.github/impetus-revision)"
-          test -n "$ref"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           repository: 1tuz/impetus
+          ref: ${{ env.IMPETUS_REF }}
           path: impetus
-          ref: ${{ steps.impetus_pin.outputs.ref }}
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt
       - name: Install Linux Tauri system deps
+
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -170,24 +178,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: impetus-desktop
-      - name: Read Impetus pin
-        id: impetus_pin
-        working-directory: .
-        run: |
-          set -euo pipefail
-          ref="$(tr -d '[:space:]' < impetus-desktop/.github/impetus-revision)"
-          test -n "$ref"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           repository: 1tuz/impetus
+          ref: ${{ env.IMPETUS_REF }}
           path: impetus
-          ref: ${{ steps.impetus_pin.outputs.ref }}
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: impetus-desktop/src-tauri
           shared-key: ci-linux-security
+
           cache-targets: "false"
       - uses: taiki-e/install-action@v2
         with:

@@ -59,8 +59,9 @@ CI stays pinned.
 - [x] Activity cards + reducer merge; `session.svelte.ts` transcript store.
 - [x] **Extensions** Prefs panel — list / enable / disable / reload via public IPC.
 - [x] **ModelSelect** including `service_tier` from daemon model APIs.
-- [x] **PTY** daemon-owned; TerminalPanel + reattach of **last detached** id
-      (no `PtyList` discovery UI).
+- [x] **PTY** daemon-owned; bottom multi-tab dock (≤8) with local
+      session book reconnect via `pty_status` + `pty_attach` (no `PtyList`
+      discovery UI). Collapse/hide does not terminate.
 - [x] Probe `failure_kind` honesty; CSP non-null; no-privilege selfcheck;
       Hello version / Incompatible warn on topbar.
 - [x] Perf baseline script; unit selfchecks (reducer, attachments, file-tree
@@ -103,8 +104,10 @@ CI stays pinned.
 
 ## BLOCKED BY CORE
 
-- [ ] **PtyList attach picker** — discover / pick arbitrary detached PTY ids.
-      Desktop only reattaches last detached id until Core exposes list IPC.
+- [ ] **PtyList attach picker** — discover / pick arbitrary detached PTY ids
+      unknown to this window. Desktop reconnects known ids via local
+      `terminalDockPrefs` session book (`pty_status` prune + `pty_attach`)
+      without ListPtys; picker for foreign/orphaned ids still needs Core.
 - [ ] **Multi-artifact on `SendPrompt`** — Core accepts a single artifact ref
       today; multi-attach send needs daemon support.
 - [ ] **Session delete / rename / archive IPC** — Desktop rail uses local
@@ -141,7 +144,7 @@ Shown in Preferences. Bound in `+page.svelte`.
 | ⌘1…9 | Select chat by index |
 | Ctrl+T | Steer intent |
 | Ctrl+Shift+P | Cycle prompt intent |
-| Ctrl+` | Toggle terminal |
+| ⌘J / Ctrl+` | Toggle terminal dock |
 | Esc / ⌘. | Close overlay / Stop turn |
 
 ---

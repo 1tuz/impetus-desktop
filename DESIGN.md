@@ -77,3 +77,11 @@ Live capture `assets/qa/rail-expanded-ok.png` (rail open).
 | R002 | Empty gap in row | Row grid `title \| actions \| meta` — no `1fr` hole between id and timestamp |
 | R003 | Rail toggle | Collapse/expand stay top-left (`justify-content: flex-start`); prefs bottom-left when collapsed |
 | R004 | Files empty | Hide preview pane until session; no dual empty-state column void |
+
+## Visual QA log (2026-09-23) — terminal bottom dock
+
+| ID | Area | Fix |
+| --- | --- | --- |
+| T001 | Terminal region | Multi-tab bottom dock under `.stage-row` only (not right panel) |
+| T002 | Tab chrome | Horizontal tabs match RightPanel tokens (`--elevated`, `--muted`, `--radius-md`) |
+| T003 | Resize | `ns-resize` handle above tab bar; height + open persist in dock prefs |

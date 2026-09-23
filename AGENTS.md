@@ -20,6 +20,23 @@ in the real app against a live `impetusd`.
 UI / visual polish: read `DESIGN.md` (token pointers + Visual QA log). Do not
 invent a second design system beside `src/app.css` / `src/lib/tokens/`.
 
+## Dev / QA — do not hijack the user's desktop
+
+**Hard rule for agents:**
+
+- **Do not** repeatedly `pnpm tauri dev`, kill/relaunch Impetus Desktop, move
+  `/Applications/Impetus Desktop.app`, or `macos_capture` / AppleScript /
+  `osascript` **focus** the native window unless the user **explicitly** asks
+  for a live native smoke in that turn.
+- **Default UI debug path:** Vite browser — `pnpm dev` (or existing Vite on
+  `127.0.0.1:1420`). Layout, tabs, buttons, CSS, click handlers → browser /
+  Cursor browser tools. Do not steal focus from the user's other windows.
+- **Tauri-only** pieces (`invoke`, PTY, folder pickers) need the native shell
+  **once**, when the user asks — not a loop of relaunch + focus + screenshot.
+- Prefer `pnpm check` / `pnpm test` / selfchecks over live window automation.
+- `macos-visual-qa` is opt-in: only when the user asks for visual QA of the
+  running macOS app.
+
 ## Immovable Boundaries
 
 - Thin shell: view + typed Tauri commands over Unix-socket IPC to `impetusd`.

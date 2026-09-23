@@ -3,7 +3,22 @@
   import { onDestroy, onMount } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
-  import { Button, Icon } from "$lib/components/ui";
+  import TerminalTabBar from "$lib/components/TerminalTabBar.svelte";
+  import {
+    DOCK_HEIGHT_DEFAULT,
+    MAX_TERMINAL_TABS,
+    clampDockHeight,
+    loadDockBlob,
+    loadSessionBook,
+    newTabId,
+    ptyStateLooksAlive,
+    reorderTabIds,
+    saveDockChrome,
+    saveSessionBook,
+    shellBasename,
+    type SessionTerminalBook,
+    type TerminalTabPersist,
+  } from "$lib/terminalDockPrefs";
   import "@xterm/xterm/css/xterm.css";
   import "$lib/components/shell.css";
 
@@ -23,6 +38,26 @@
     eof: boolean;
   };
 
+  type TerminalEnvDto = {
+    default_shell: string;
+    shells: string[];
+    home_dir: string | null;
+  };
+
+  type TabRuntime = {
+    id: string;
+    ptyId: number;
+    title: string;
+    shellPath: string;
+    cwdHint: string | null;
+    createdAtMs: number;
+    titleCustom: boolean;
+    term: Terminal | null;
+    fit: FitAddon | null;
+    hostEl: HTMLDivElement | null;
+    eof: boolean;
+  };
+
   let {
     open = $bindable(false),
     sessionId = "",
@@ -35,19 +70,34 @@
     connected?: boolean;
   } = $props();
 
-  let hostEl = $state<HTMLDivElement | null>(null);
-  let statusText = $state("idle");
+  let heightPx = $state(DOCK_HEIGHT_DEFAULT);
   let errorText = $state("");
   let busy = $state(false);
-  let ptyId = $state<number | null>(null);
-  /** Last detached pty_id for this session — presentation memory (no PtyList IPC). */
-  let lastDetachedPtyId = $state<number | null>(null);
+  let menuOpen = $state(false);
+  let tabOrder = $state<string[]>([]);
+  let activeTabId = $state<string | null>(null);
+  let runtimes = $state<Record<string, TabRuntime>>({});
+  let env = $state<TerminalEnvDto | null>(null);
 
-  let term: Terminal | null = null;
-  let fit: FitAddon | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
-  let resizeObserver: ResizeObserver | null = null;
   let disposed = false;
+  let restoring = false;
+  /** One auto-create attempt per dock-open (avoid error retry loops). */
+  let autoCreateTried = false;
+  /** Bumps on session clear/switch so in-flight restore/create can abort. */
+  let lifecycleGen = 0;
+  let resizeDrag = $state(false);
+  let prefsReady = false;
+  let boundSessionId: string | null = null;
+
+  const tabBarItems = $derived(
+    tabOrder
+      .map((id) => {
+        const rt = runtimes[id];
+        return rt ? { id: rt.id, title: rt.title } : null;
+      })
+      .filter((t): t is { id: string; title: string } => t != null),
+  );
 
   function inTauriShell(): boolean {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -68,21 +118,85 @@
     }
   }
 
-  function disposeTerm() {
-    stopPoll();
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-    term?.dispose();
-    term = null;
-    fit = null;
+  function persistBook(forSessionId: string | null = sessionId) {
+    if (!forSessionId) return;
+    // Never write another session's book after a mid-flight switch.
+    if (forSessionId !== sessionId) return;
+    const tabs: Record<string, TerminalTabPersist> = {};
+    for (const id of tabOrder) {
+      const rt = runtimes[id];
+      if (!rt) continue;
+      tabs[id] = {
+        id: rt.id,
+        ptyId: rt.ptyId,
+        title: rt.title,
+        shellPath: rt.shellPath,
+        cwdHint: rt.cwdHint,
+        createdAtMs: rt.createdAtMs,
+      };
+    }
+    const book: SessionTerminalBook = {
+      activeTabId:
+        activeTabId && tabs[activeTabId] ? activeTabId : (tabOrder[0] ?? null),
+      tabOrder: tabOrder.filter((id) => tabs[id]),
+      tabs,
+    };
+    saveSessionBook(forSessionId, book);
   }
 
-  function ensureTerm() {
-    if (!hostEl || term) return;
+  function disposeRuntimeTerm(rt: TabRuntime) {
+    rt.term?.dispose();
+    rt.term = null;
+    rt.fit = null;
+  }
+
+  function disposeAllTerms() {
+    stopPoll();
+    for (const rt of Object.values(runtimes)) {
+      disposeRuntimeTerm(rt);
+    }
+  }
+
+  function clearAllTabs() {
+    lifecycleGen += 1;
+    restoring = false;
+    autoCreateTried = false;
+    disposeAllTerms();
+    runtimes = {};
+    tabOrder = [];
+    activeTabId = null;
+  }
+
+  function hostAction(node: HTMLDivElement, id: string) {
+    const rt = runtimes[id];
+    if (rt) {
+      rt.hostEl = node;
+      if (!rt.term) ensureTerm(rt);
+      else if (rt.term.element?.parentElement !== node) {
+        // Host remounted after collapse — reopen into new node.
+        disposeRuntimeTerm(rt);
+        ensureTerm(rt);
+      }
+      if (id === activeTabId) {
+        void fitAndResize(rt);
+        rt.term?.focus();
+      }
+    }
+    return {
+      destroy() {
+        const cur = runtimes[id];
+        if (cur && cur.hostEl === node) cur.hostEl = null;
+      },
+    };
+  }
+
+  function ensureTerm(rt: TabRuntime) {
+    if (!rt.hostEl || rt.term) return;
     const next = new Terminal({
       convertEol: true,
       cursorBlink: true,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      fontFamily:
+        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       fontSize: 13,
       theme: {
         background: "transparent",
@@ -92,32 +206,36 @@
     });
     const addon = new FitAddon();
     next.loadAddon(addon);
-    next.open(hostEl);
+    next.open(rt.hostEl);
     addon.fit();
     next.onData((data: string) => {
-      void sendInput(data);
+      void sendInput(rt, data);
     });
-    term = next;
-    fit = addon;
-    resizeObserver = new ResizeObserver(() => {
-      void fitAndResize();
+    next.onTitleChange((title: string) => {
+      const t = title.trim();
+      if (!t) return;
+      rt.title = t;
+      rt.titleCustom = true;
+      runtimes = { ...runtimes };
+      persistBook();
     });
-    resizeObserver.observe(hostEl);
+    rt.term = next;
+    rt.fit = addon;
   }
 
-  async function fitAndResize() {
-    if (!term || !fit || !ptyId || !sessionId || !inTauriShell()) {
-      fit?.fit();
-      return;
-    }
-    fit.fit();
-    const cols = term.cols;
-    const rows = term.rows;
+  async function fitAndResize(rt: TabRuntime | null = null) {
+    const target =
+      rt ?? (activeTabId ? (runtimes[activeTabId] ?? null) : null);
+    if (!target?.term || !target.fit) return;
+    target.fit.fit();
+    if (!sessionId || !inTauriShell() || target.ptyId < 1) return;
+    const cols = target.term.cols;
+    const rows = target.term.rows;
     if (cols < 1 || rows < 1) return;
     try {
       await invoke("pty_resize", {
         sessionId,
-        ptyId,
+        ptyId: target.ptyId,
         cols,
         rows,
       });
@@ -126,49 +244,92 @@
     }
   }
 
-  async function sendInput(data: string) {
-    if (!ptyId || !sessionId || !inTauriShell() || !data) return;
+  async function sendInput(rt: TabRuntime, data: string) {
+    if (!sessionId || !inTauriShell() || !data || rt.ptyId < 1) return;
     const bytes = Array.from(new TextEncoder().encode(data));
     try {
-      await invoke("pty_input", { sessionId, ptyId, data: bytes });
+      await invoke("pty_input", {
+        sessionId,
+        ptyId: rt.ptyId,
+        data: bytes,
+      });
     } catch (err) {
       errorText = errorMessage(err);
     }
   }
 
-  async function drainOnce() {
-    if (!ptyId || !sessionId || !inTauriShell() || !term) return;
+  async function drainTab(rt: TabRuntime) {
+    if (!sessionId || !inTauriShell() || !rt.term || rt.eof || rt.ptyId < 1) {
+      return;
+    }
     try {
       const chunk = await invoke<PtyOutputDto>("pty_output", {
         sessionId,
-        ptyId,
+        ptyId: rt.ptyId,
         maxBytes: 65536,
       });
       if (chunk.data.length) {
-        term.write(Uint8Array.from(chunk.data));
-      }
-      if (chunk.dropped_total > 0) {
-        statusText = `pty ${ptyId} · dropped ${chunk.dropped_total}`;
+        rt.term.write(Uint8Array.from(chunk.data));
       }
       if (chunk.eof) {
-        stopPoll();
-        statusText = `pty ${ptyId} · eof`;
+        rt.eof = true;
       }
     } catch (err) {
-      stopPoll();
+      // Transient IPC blip — keep polling; permanent death shows via status/reconnect.
       errorText = errorMessage(err);
-      statusText = "poll error";
     }
+  }
+
+  async function drainAll() {
+    const list = Object.values(runtimes).filter((rt) => !rt.eof && rt.ptyId > 0);
+    await Promise.all(list.map((rt) => drainTab(rt)));
   }
 
   function startPoll() {
     stopPoll();
+    if (!open) return;
     pollTimer = setInterval(() => {
-      void drainOnce();
+      void drainAll();
     }, 50);
   }
 
-  async function startShell() {
+  async function loadEnv() {
+    if (!inTauriShell()) {
+      env = {
+        default_shell: "/bin/zsh",
+        shells: ["/bin/zsh"],
+        home_dir: null,
+      };
+      return;
+    }
+    try {
+      env = await invoke<TerminalEnvDto>("terminal_env");
+    } catch {
+      env = {
+        default_shell: "/bin/zsh",
+        shells: ["/bin/zsh"],
+        home_dir: null,
+      };
+    }
+  }
+
+  function resolveShell(shellPath?: string): string {
+    const path = shellPath?.trim();
+    if (path) return path;
+    return env?.default_shell?.trim() || "/bin/zsh";
+  }
+
+  function resolveCwd(kind: "workspace" | "home"): string | null {
+    if (kind === "home") {
+      return env?.home_dir?.trim() || null;
+    }
+    return workspaceRoot.trim() || null;
+  }
+
+  async function createTerminal(
+    shellPath?: string,
+    cwdKind: "workspace" | "home" = "workspace",
+  ) {
     if (!inTauriShell()) {
       errorText = "PTY needs Tauri shell + live Runtime";
       return;
@@ -177,251 +338,435 @@
       errorText = "Connect and select a session first";
       return;
     }
+    if (tabOrder.length >= MAX_TERMINAL_TABS) {
+      errorText = `Soft cap ${MAX_TERMINAL_TABS} terminals`;
+      return;
+    }
     busy = true;
     errorText = "";
+    const shell = resolveShell(shellPath);
+    const cwd = resolveCwd(cwdKind);
+    const id = newTabId();
+    const createdAtMs = Date.now();
     try {
-      ensureTerm();
-      fit?.fit();
-      const cols = term?.cols ?? 80;
-      const rows = term?.rows ?? 24;
+      // Placeholder runtime so host mounts before pty_start sizing.
+      const placeholder: TabRuntime = {
+        id,
+        ptyId: 0,
+        title: shellBasename(shell),
+        shellPath: shell,
+        cwdHint: cwd,
+        createdAtMs,
+        titleCustom: false,
+        term: null,
+        fit: null,
+        hostEl: null,
+        eof: false,
+      };
+      runtimes = { ...runtimes, [id]: placeholder };
+      tabOrder = [...tabOrder, id];
+      activeTabId = id;
+      // Wait a frame for host action to bind + open xterm.
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      const rt = runtimes[id];
+      if (!rt) return;
+      ensureTerm(rt);
+      rt.fit?.fit();
+      const cols = rt.term?.cols ?? 80;
+      const rows = rt.term?.rows ?? 24;
+      const startSid = sessionId;
+      const startGen = lifecycleGen;
       const view = await invoke<PtySessionDto>("pty_start", {
-        sessionId,
-        command: "/bin/zsh",
-        // Non-login argv — daemon refuses `-l` / `--login` (password-prompt surface).
+        sessionId: startSid,
+        command: shell,
+        // Non-login argv — daemon refuses `-l` / `--login`.
         args: [],
-        workingDir: workspaceRoot.trim() || null,
+        workingDir: cwd,
         cols,
         rows,
       });
-      ptyId = view.pty_id;
-      statusText = `pty ${view.pty_id} · ${view.state} · owner ${view.owner_session_id.slice(0, 8)}`;
-      term?.reset();
-      term?.focus();
+      // Session switched or tab cleared while start was in flight — kill orphan.
+      if (
+        disposed ||
+        startGen !== lifecycleGen ||
+        startSid !== sessionId ||
+        !runtimes[id]
+      ) {
+        try {
+          await invoke("pty_terminate", {
+            sessionId: startSid,
+            ptyId: view.pty_id,
+          });
+        } catch {
+          // Best-effort orphan cleanup.
+        }
+        return;
+      }
+      rt.ptyId = view.pty_id;
+      runtimes = { ...runtimes };
+      persistBook(startSid);
+      rt.term?.focus();
       startPoll();
-      await drainOnce();
+      await drainTab(rt);
+      await fitAndResize(rt);
     } catch (err) {
+      // Roll back failed tab.
+      const failed = runtimes[id];
+      if (failed) disposeRuntimeTerm(failed);
+      const next = { ...runtimes };
+      delete next[id];
+      runtimes = next;
+      tabOrder = tabOrder.filter((t) => t !== id);
+      if (activeTabId === id) {
+        activeTabId = tabOrder[tabOrder.length - 1] ?? null;
+      }
       errorText = errorMessage(err);
-      statusText = "start failed";
     } finally {
       busy = false;
     }
   }
 
-  async function detachPty() {
-    if (!ptyId || !sessionId || !inTauriShell()) return;
+  async function closeTab(id: string) {
+    const rt = runtimes[id];
+    if (!rt) return;
+    if (
+      rt.titleCustom &&
+      typeof window !== "undefined" &&
+      !window.confirm(`Close terminal “${rt.title}”?`)
+    ) {
+      return;
+    }
     busy = true;
     errorText = "";
     try {
-      await invoke("pty_detach", { sessionId, ptyId });
-      stopPoll();
-      statusText = `pty ${ptyId} · detached`;
-      lastDetachedPtyId = ptyId;
-      ptyId = null;
+      if (rt.ptyId > 0 && sessionId && inTauriShell()) {
+        await invoke("pty_terminate", { sessionId, ptyId: rt.ptyId });
+      }
     } catch (err) {
       errorText = errorMessage(err);
     } finally {
+      disposeRuntimeTerm(rt);
+      const next = { ...runtimes };
+      delete next[id];
+      runtimes = next;
+      tabOrder = tabOrder.filter((t) => t !== id);
+      if (activeTabId === id) {
+        activeTabId = tabOrder[tabOrder.length - 1] ?? null;
+      }
+      persistBook();
       busy = false;
+      if (activeTabId) {
+        const active = runtimes[activeTabId];
+        if (active) {
+          void fitAndResize(active);
+          active.term?.focus();
+        }
+      }
     }
   }
 
-  async function reattachPty() {
-    if (!sessionId || !inTauriShell() || lastDetachedPtyId == null) return;
-    busy = true;
+  function selectTab(id: string) {
+    if (!runtimes[id]) return;
+    activeTabId = id;
+    persistBook();
+    voidMicrotaskFit(id);
+  }
+
+  function voidMicrotaskFit(id: string) {
+    queueMicrotask(() => {
+      const rt = runtimes[id];
+      if (!rt) return;
+      ensureTerm(rt);
+      void fitAndResize(rt);
+      rt.term?.focus();
+    });
+  }
+
+  function reorderTabs(fromId: string, toId: string) {
+    tabOrder = reorderTabIds(tabOrder, fromId, toId);
+    persistBook();
+  }
+
+  async function restoreFromBook(sid: string) {
+    if (!sid || !connected || !inTauriShell()) return;
+    const gen = lifecycleGen;
+    restoring = true;
     errorText = "";
     try {
-      ensureTerm();
-      fit?.fit();
-      const view = await invoke<PtySessionDto>("pty_attach", {
-        sessionId,
-        ptyId: lastDetachedPtyId,
-      });
-      ptyId = view.pty_id;
-      lastDetachedPtyId = null;
-      statusText = `pty ${view.pty_id} · ${view.state} · reattached`;
-      term?.focus();
-      startPoll();
-      await drainOnce();
-      await fitAndResize();
-    } catch (err) {
-      errorText = errorMessage(err);
-      statusText = "reattach failed";
+      await loadEnv();
+      if (disposed || gen !== lifecycleGen || sid !== sessionId) return;
+      const book = loadSessionBook(sid);
+      const nextOrder: string[] = [];
+      const nextRuntimes: Record<string, TabRuntime> = {};
+      for (const id of book.tabOrder.slice(0, MAX_TERMINAL_TABS)) {
+        if (disposed || gen !== lifecycleGen || sid !== sessionId) return;
+        const tab = book.tabs[id];
+        if (!tab) continue;
+        try {
+          const status = await invoke<PtySessionDto>("pty_status", {
+            sessionId: sid,
+            ptyId: tab.ptyId,
+          });
+          if (!ptyStateLooksAlive(status.state)) continue;
+          await invoke<PtySessionDto>("pty_attach", {
+            sessionId: sid,
+            ptyId: tab.ptyId,
+          });
+          nextRuntimes[id] = {
+            id: tab.id,
+            ptyId: tab.ptyId,
+            title: tab.title || shellBasename(tab.shellPath),
+            shellPath: tab.shellPath,
+            cwdHint: tab.cwdHint,
+            createdAtMs: tab.createdAtMs,
+            titleCustom: false,
+            term: null,
+            fit: null,
+            hostEl: null,
+            eof: false,
+          };
+          nextOrder.push(id);
+        } catch {
+          // Dead or unreachable — prune from book.
+        }
+      }
+      if (disposed || gen !== lifecycleGen || sid !== sessionId) return;
+      disposeAllTerms();
+      runtimes = nextRuntimes;
+      tabOrder = nextOrder;
+      activeTabId =
+        book.activeTabId && nextRuntimes[book.activeTabId]
+          ? book.activeTabId
+          : (nextOrder[0] ?? null);
+      persistBook(sid);
+      if (open && nextOrder.length) {
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+        if (disposed || gen !== lifecycleGen || sid !== sessionId) return;
+        for (const id of nextOrder) {
+          const rt = runtimes[id];
+          if (rt) ensureTerm(rt);
+        }
+        if (activeTabId) voidMicrotaskFit(activeTabId);
+        startPoll();
+        await drainAll();
+      }
     } finally {
-      busy = false;
+      if (gen === lifecycleGen) restoring = false;
     }
   }
 
-  async function terminatePty() {
-    if (!ptyId || !sessionId || !inTauriShell()) return;
-    busy = true;
-    errorText = "";
-    try {
-      await invoke("pty_terminate", { sessionId, ptyId });
-      stopPoll();
-      statusText = `pty ${ptyId} · terminated`;
-      ptyId = null;
-    } catch (err) {
-      errorText = errorMessage(err);
-    } finally {
-      busy = false;
+  function onMenuAction(
+    action:
+      | { kind: "shell"; shellPath: string }
+      | { kind: "cwd"; cwd: "workspace" | "home" },
+  ) {
+    if (action.kind === "shell") {
+      void createTerminal(action.shellPath || undefined, "workspace");
+    } else {
+      void createTerminal(undefined, action.cwd);
     }
   }
 
-  let prevSessionId = $state<string | null>(null);
+  function onResizePointerDown(e: PointerEvent) {
+    e.preventDefault();
+    resizeDrag = true;
+    const startY = e.clientY;
+    const startH = heightPx;
+    const onMove = (ev: PointerEvent) => {
+      // Drag handle is above the dock — moving up grows height.
+      const next = clampDockHeight(startH + (startY - ev.clientY));
+      heightPx = next;
+    };
+    const onUp = () => {
+      resizeDrag = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      saveDockChrome(heightPx, open);
+      if (activeTabId) void fitAndResize(runtimes[activeTabId] ?? null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  // Hide collapses chrome only — never terminates PTYs.
+  function hideDock() {
+    open = false;
+    autoCreateTried = false;
+  }
 
   $effect(() => {
-    const sid = sessionId;
-    if (prevSessionId !== null && prevSessionId !== sid) {
-      stopPoll();
-      ptyId = null;
-      lastDetachedPtyId = null;
-      statusText = "idle";
-      errorText = "";
-    }
-    prevSessionId = sid;
+    if (!prefsReady) return;
+    saveDockChrome(heightPx, open);
   });
 
   $effect(() => {
     if (open) {
+      startPoll();
       queueMicrotask(() => {
         if (disposed) return;
-        ensureTerm();
-        void fitAndResize();
+        for (const id of tabOrder) {
+          const rt = runtimes[id];
+          if (rt?.hostEl) ensureTerm(rt);
+        }
+        if (activeTabId) {
+          const rt = runtimes[activeTabId];
+          if (rt) {
+            void fitAndResize(rt);
+            rt.term?.focus();
+          }
+        } else if (
+          !autoCreateTried &&
+          tabOrder.length === 0 &&
+          connected &&
+          sessionId &&
+          inTauriShell() &&
+          !busy &&
+          !restoring
+        ) {
+          // Open dock with no tabs → start one shell immediately.
+          autoCreateTried = true;
+          void createTerminal();
+        }
       });
+    } else {
+      // Collapse: pause poll + dispose xterm views; keep pty ids (no terminate).
+      stopPoll();
+      for (const rt of Object.values(runtimes)) {
+        disposeRuntimeTerm(rt);
+        rt.hostEl = null;
+      }
     }
+  });
+
+  $effect(() => {
+    const sid = sessionId;
+    const ok = connected;
+    if (!prefsReady || disposed) return;
+    if (!sid || !ok) {
+      if (boundSessionId !== null) {
+        clearAllTabs();
+        boundSessionId = null;
+      }
+      return;
+    }
+    if (boundSessionId === sid) return;
+    boundSessionId = sid;
+    clearAllTabs();
+    void restoreFromBook(sid);
   });
 
   onMount(() => {
     disposed = false;
+    const blob = loadDockBlob();
+    heightPx = blob.dock.heightPx;
+    // Prefer already-open bind from page; only restore closed→open from prefs.
+    if (blob.dock.open) open = true;
+    prefsReady = true;
+    void loadEnv();
     return () => {
       disposed = true;
-      disposeTerm();
+      stopPoll();
+      disposeAllTerms();
     };
   });
 
   onDestroy(() => {
     disposed = true;
-    disposeTerm();
+    stopPoll();
+    disposeAllTerms();
   });
 </script>
 
 {#if open}
-  <section class="pty-panel shell-acrylic" aria-label="Terminal">
-    <div class="pty-toolbar">
-      <div class="pty-meta">
-        <span class="pty-title">Terminal</span>
-        <span class="pty-status mono">{statusText}</span>
-      </div>
-      <div class="pty-actions">
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={busy || !connected || !sessionId || ptyId !== null}
-          title="Start Runtime-owned zsh PTY"
-          aria-label="Start Runtime-owned zsh PTY"
-          onclick={() => void startShell()}
-        >
-          <Icon name="terminal" size={14} />
-          Start
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={
-            busy ||
-            !connected ||
-            !sessionId ||
-            ptyId !== null ||
-            lastDetachedPtyId == null
-          }
-          title={lastDetachedPtyId != null
-            ? `Reattach pty ${lastDetachedPtyId}`
-            : "No detached PTY in this panel"}
-          onclick={() => void reattachPty()}
-        >
-          Reattach
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={busy || ptyId === null}
-          title="Detach PTY (Runtime keeps process)"
-          onclick={() => void detachPty()}
-        >
-          Detach
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={busy || ptyId === null}
-          title="Terminate PTY"
-          onclick={() => void terminatePty()}
-        >
-          Kill
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          title="Hide terminal"
-          aria-label="Hide terminal"
-          onclick={() => (open = false)}
-        >
-          <Icon name="x" size={14} />
-        </Button>
-      </div>
-    </div>
+  <section
+    class="pty-panel shell-acrylic"
+    class:resizing={resizeDrag}
+    style:height="{heightPx}px"
+    aria-label="Terminal"
+  >
+    <div
+      class="resize-handle"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize terminal"
+      onpointerdown={onResizePointerDown}
+    ></div>
+
+    <TerminalTabBar
+      tabs={tabBarItems}
+      activeId={activeTabId}
+      bind:menuOpen
+      canCreate={!busy && tabOrder.length < MAX_TERMINAL_TABS}
+      shells={env?.shells ?? []}
+      onSelect={selectTab}
+      onClose={(id) => void closeTab(id)}
+      onCreate={() => void createTerminal()}
+      onReorder={reorderTabs}
+      onMenuAction={onMenuAction}
+      onHide={hideDock}
+    />
+
     {#if errorText}
       <p class="pty-error" role="alert">{errorText}</p>
     {/if}
-    <div class="pty-host" bind:this={hostEl}></div>
+
+    <div class="pty-stack">
+      {#each tabOrder as id (id)}
+        <div
+          class="pty-host"
+          class:active={id === activeTabId}
+          hidden={id !== activeTabId}
+          role="tabpanel"
+          aria-labelledby={`terminal-tab-${id}`}
+          use:hostAction={id}
+          onclick={() => {
+            selectTab(id);
+            runtimes[id]?.term?.focus();
+          }}
+        ></div>
+      {/each}
+      {#if tabOrder.length === 0}
+        <div class="pty-empty" aria-hidden="true"></div>
+      {/if}
+    </div>
   </section>
 {/if}
 
 <style>
   .pty-panel {
+    position: relative;
     display: flex;
     flex-direction: column;
-    min-height: 14rem;
-    max-height: 40vh;
+    min-height: 0;
+    flex-shrink: 0;
     border-top: 1px solid var(--border);
     background: color-mix(in srgb, var(--panel) 92%, transparent);
   }
 
-  .pty-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    padding: var(--space-2) var(--space-3);
-    border-bottom: 1px solid var(--border);
+  .pty-panel.resizing {
+    user-select: none;
   }
 
-  .pty-meta {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    min-width: 0;
+  .resize-handle {
+    position: absolute;
+    top: -2px;
+    left: 0;
+    right: 0;
+    height: 4px;
+    cursor: ns-resize;
+    z-index: 1;
   }
 
-  .pty-title {
-    font-size: var(--text-sm);
-    font-weight: var(--font-medium);
-    color: var(--text);
+  .resize-handle:hover,
+  .pty-panel.resizing .resize-handle {
+    background: color-mix(in srgb, var(--accent, var(--border)) 45%, transparent);
   }
 
-  .pty-status {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--text-xs);
-    color: var(--muted);
+  .pty-panel :global(.tab-bar) {
+    position: relative;
+    z-index: 5;
   }
 
-  .pty-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    flex-shrink: 0;
-  }
 
   .pty-error {
     margin: 0;
@@ -430,11 +775,28 @@
     color: var(--danger, #f87171);
   }
 
-  .pty-host {
+  .pty-stack {
+    position: relative;
     flex: 1;
-    min-height: 10rem;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .pty-host {
+    position: absolute;
+    inset: 0;
     padding: var(--space-2) var(--space-3);
     overflow: hidden;
+  }
+
+  .pty-host:not(.active) {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .pty-host.active {
+    pointer-events: auto;
+    cursor: text;
   }
 
   .pty-host :global(.xterm) {
@@ -445,7 +807,7 @@
     overflow-y: auto !important;
   }
 
-  .mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  .pty-empty {
+    height: 100%;
   }
 </style>

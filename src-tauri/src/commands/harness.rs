@@ -33,14 +33,34 @@ pub struct StatusInfo {
     pub runtime_status: Option<String>,
 }
 
-fn default_socket_path() -> String {
-    if let Ok(path) = std::env::var("IMPETUS_SOCKET") {
-        if !path.trim().is_empty() {
-            return path;
-        }
-    }
+fn default_app_support_socket() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     format!("{home}/Library/Application Support/Impetus/harness.sock")
+}
+
+/// Smoke / CI often leaves `IMPETUS_SOCKET=/tmp/impetus-…`. That path fools the
+/// GUI: sock file exists, nothing listens, Start spawns into a dead endpoint.
+fn is_ephemeral_smoke_socket(path: &str) -> bool {
+    let p = path.trim();
+    p.starts_with("/tmp/impetus-") || (p.starts_with("/var/folders/") && p.contains("impetus"))
+}
+
+fn default_socket_path() -> String {
+    if let Ok(path) = std::env::var("IMPETUS_SOCKET") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() && !is_ephemeral_smoke_socket(trimmed) {
+            return trimmed.to_owned();
+        }
+    }
+    default_app_support_socket()
+}
+
+/// Drop a sock inode that exists but accepts no connect — blocks bind + probe.
+fn remove_stale_socket(socket_path: &str) {
+    let path = PathBuf::from(socket_path);
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 fn parse_uuid(value: &str, label: &str) -> CommandResult<Uuid> {
@@ -442,10 +462,12 @@ fn resolve_impetusd_bin() -> CommandResult<PathBuf> {
     }
 
     // CARGO_MANIFEST_DIR = src-tauri; sibling layout matches impetus-client path-dep.
-    let sibling =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../impetus/target/debug/impetusd");
-    if sibling.is_file() {
-        return Ok(sibling);
+    let sibling_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../impetus/target");
+    for rel in ["release/impetusd", "debug/impetusd"] {
+        let candidate = sibling_root.join(rel);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
     }
 
     which_impetusd().ok_or_else(|| {
@@ -468,7 +490,7 @@ fn which_impetusd() -> Option<PathBuf> {
     pb.is_file().then_some(pb)
 }
 
-/// Spawn detached `impetusd` (mock provider, no TCC/Keychain), then poll socket ~2s.
+/// Spawn detached `impetusd` (mock provider, no TCC/Keychain), then poll socket ~5s.
 #[tauri::command]
 pub async fn start_daemon() -> CommandResult<DaemonProbe> {
     let existing = probe_daemon_inner().await;
@@ -479,16 +501,24 @@ pub async fn start_daemon() -> CommandResult<DaemonProbe> {
         });
     }
 
+    let socket_path = existing.socket_path.clone();
+    // Stale inode: file present, nothing listens → child cannot bind, probe lies.
+    if existing.socket_exists {
+        remove_stale_socket(&socket_path);
+    }
+
     let bin = resolve_impetusd_bin()?;
+    // Child must listen where we probe — ignore inherited smoke IMPETUS_* .
     Command::new(&bin)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .env("IMPETUS_SOCKET", &socket_path)
+        .env_remove("IMPETUS_DATA_DIR")
         .spawn()
         .map_err(|err| CommandError::new(format!("failed to spawn {}: {err}", bin.display())))?;
 
-    // Poll socket for ~2s after spawn.
-    for _ in 0..20 {
+    for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let probe = probe_daemon_inner().await;
         if probe.reachable {
@@ -988,14 +1018,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_socket_respects_env() {
-        // ponytail: env mutate is process-global; fine for one unit smoke
+    fn default_socket_env_stable_vs_smoke() {
+        // ponytail: env mutate is process-global — keep both cases in one test
+        // so parallel lib tests cannot race IMPETUS_SOCKET.
         let previous = std::env::var("IMPETUS_SOCKET").ok();
-        // SAFETY: single-threaded test; restore env after assertion
         unsafe {
-            std::env::set_var("IMPETUS_SOCKET", "/tmp/impetus-test.sock");
+            std::env::set_var("IMPETUS_SOCKET", "/tmp/stable-harness.sock");
         }
-        assert_eq!(default_socket_path(), "/tmp/impetus-test.sock");
+        assert_eq!(default_socket_path(), "/tmp/stable-harness.sock");
+        unsafe {
+            std::env::set_var("IMPETUS_SOCKET", "/tmp/impetus-cr-0LbE/harness.sock");
+        }
+        let got = default_socket_path();
+        assert!(
+            got.ends_with("Library/Application Support/Impetus/harness.sock"),
+            "smoke IMPETUS_SOCKET must fall back to app-support, got {got}"
+        );
         match previous {
             Some(value) => unsafe {
                 std::env::set_var("IMPETUS_SOCKET", value);
@@ -1004,6 +1042,14 @@ mod tests {
                 std::env::remove_var("IMPETUS_SOCKET");
             },
         }
+    }
+
+    #[test]
+    fn ephemeral_smoke_socket_detect() {
+        assert!(is_ephemeral_smoke_socket(
+            "/tmp/impetus-cr-0LbE/harness.sock"
+        ));
+        assert!(!is_ephemeral_smoke_socket("/tmp/stable-harness.sock"));
     }
 
     #[test]

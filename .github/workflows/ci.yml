@@ -109,6 +109,12 @@ jobs:
           shared-key: ci-macos
 
           cache-targets: "true"
+      # Tauri build.rs requires externalBin path; real binary only for package.
+      - name: Stub impetusd sidecar path
+        working-directory: impetus-desktop
+        run: |
+          chmod +x scripts/ci-stub-impetusd-sidecar.sh
+          ./scripts/ci-stub-impetusd-sidecar.sh
       - name: Clippy
         run: cargo clippy --lib --bins -- -D warnings
       - name: Test
@@ -160,6 +166,11 @@ jobs:
           workspaces: impetus-desktop/src-tauri
           shared-key: ci-linux
           cache-targets: "true"
+      - name: Stub impetusd sidecar path
+        working-directory: impetus-desktop
+        run: |
+          chmod +x scripts/ci-stub-impetusd-sidecar.sh
+          ./scripts/ci-stub-impetusd-sidecar.sh
       - name: Format
         run: cargo fmt --all -- --check
       - name: Check

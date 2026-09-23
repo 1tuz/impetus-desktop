@@ -38,7 +38,8 @@ export type TerminalDockBlob = {
 function emptyBlob(): TerminalDockBlob {
   return {
     version: 1,
-    dock: { heightPx: DOCK_HEIGHT_DEFAULT, open: true },
+    // Closed until ⌘J — never greet with an empty useless dock.
+    dock: { heightPx: DOCK_HEIGHT_DEFAULT, open: false },
     bySession: {},
   };
 }
@@ -62,7 +63,7 @@ export function loadDockBlob(): TerminalDockBlob {
     if (ver !== 1) return emptyBlob();
     const dockRaw = obj.dock;
     let heightPx = DOCK_HEIGHT_DEFAULT;
-    let open = true;
+    let open = false;
     if (dockRaw && typeof dockRaw === "object" && !Array.isArray(dockRaw)) {
       const d = dockRaw as Record<string, unknown>;
       if (typeof d.heightPx === "number") heightPx = clampDockHeight(d.heightPx);
@@ -203,6 +204,41 @@ export function reorderTabIds(
   if (item === undefined) return order.slice();
   next.splice(to, 0, item);
   return next;
+}
+
+/**
+ * After closing `closedId`, pick nearest remaining tab (prefer left neighbor).
+ * Presentation-only — does not touch daemon.
+ */
+export function pickNeighborTabId(
+  order: string[],
+  closedId: string,
+): string | null {
+  const idx = order.indexOf(closedId);
+  if (idx < 0) return order[0] ?? null;
+  const remaining = order.filter((id) => id !== closedId);
+  if (!remaining.length) return null;
+  // Prefer previous (left); else next (was right of closed).
+  if (idx > 0) {
+    const left = order[idx - 1];
+    if (left && left !== closedId) return left;
+  }
+  return remaining[Math.min(idx, remaining.length - 1)] ?? remaining[0] ?? null;
+}
+
+/** Gap-fill `session N` title from existing tab titles. */
+export function nextSessionTitle(existingTitles: string[]): string {
+  const used = new Set<number>();
+  for (const title of existingTitles) {
+    const m = /^session\s+(\d+)$/i.exec(title.trim());
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > 0) used.add(n);
+    }
+  }
+  let n = 1;
+  while (used.has(n)) n += 1;
+  return `session ${n}`;
 }
 
 /** Alive if Core state string is Starting / Running / Detached. */

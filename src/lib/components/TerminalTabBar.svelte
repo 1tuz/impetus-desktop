@@ -75,6 +75,8 @@
 </script>
 
 <div class="tab-bar">
+  <span class="dock-label" aria-hidden="true">Terminal</span>
+
   <div class="tabs" role="tablist" aria-label="Terminal tabs">
     {#each tabs as tab (tab.id)}
       <div
@@ -200,11 +202,11 @@
     variant="ghost"
     size="icon"
     class="hide-btn"
-    title="Hide terminal"
+    title="Hide terminal (keeps sessions)"
     aria-label="Hide terminal"
     onclick={() => onHide?.()}
   >
-    <Icon name="x" size={14} />
+    <Icon name="chevron-down" size={14} />
   </Button>
 </div>
 
@@ -221,6 +223,16 @@
     pointer-events: auto;
   }
 
+  .dock-label {
+    flex-shrink: 0;
+    padding-inline: var(--space-2);
+    font-size: var(--text-xs);
+    font-weight: var(--font-medium);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
   .tabs {
     display: flex;
     align-items: center;
@@ -228,6 +240,7 @@
     min-width: 0;
     flex: 1;
     overflow-x: auto;
+    scrollbar-width: thin;
   }
 
   .tab-wrap {

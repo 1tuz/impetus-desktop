@@ -125,6 +125,20 @@ violation.
 5. Required check `Gate` passes → GitHub auto-merges to main
 6. After merge: `git checkout main && git pull`
 
+#### Finish = ship (no ask)
+
+When the requested vertical slice is implemented and verify/checks are green
+on a feature branch, **complete the loop without asking**:
+
+1. Commit (issue ref; no secrets / QA dumps / build junk)
+2. Push (`-u` if needed)
+3. `gh pr create --fill` if no open PR
+4. `gh pr merge --auto --squash`
+
+Do **not** ask “commit?”, “push?”, or “automerge?”. Unpushed finished work
+counts as **incomplete**. Ask only for force-push, push to `main`, secrets in
+diff, ambiguous scope, or when the user said stop / don’t push.
+
 #### Auto-merge Setup (once per project)
 
 In GitHub Repository Settings → General → Pull Requests:

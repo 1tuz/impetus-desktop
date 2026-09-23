@@ -4,6 +4,7 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import TerminalTabBar from "$lib/components/TerminalTabBar.svelte";
+  import { Button, EmptyState } from "$lib/components/ui";
   import {
     DOCK_HEIGHT_DEFAULT,
     MAX_TERMINAL_TABS,
@@ -11,11 +12,12 @@
     loadDockBlob,
     loadSessionBook,
     newTabId,
+    nextSessionTitle,
+    pickNeighborTabId,
     ptyStateLooksAlive,
     reorderTabIds,
     saveDockChrome,
     saveSessionBook,
-    shellBasename,
     type SessionTerminalBook,
     type TerminalTabPersist,
   } from "$lib/terminalDockPrefs";
@@ -192,16 +194,22 @@
 
   function ensureTerm(rt: TabRuntime) {
     if (!rt.hostEl || rt.term) return;
+    // Prefer Nerd Font when installed — glyphs for Starship/Powerlevel10k;
+    // fall back to system monospace. No theme-specific hacks.
     const next = new Terminal({
       convertEol: true,
       cursorBlink: true,
+      scrollback: 5000,
+      allowTransparency: true,
+      // xterm-256color / truecolor + OSC title handled by xterm protocol.
       fontFamily:
-        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        '"MesloLGS NF", "MesloLGS Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", Menlo, Monaco, "SF Mono", ui-monospace, monospace',
       fontSize: 13,
       theme: {
         background: "transparent",
         foreground: "var(--text, #e4e4e7)",
         cursor: "var(--accent, #a1a1aa)",
+        selectionBackground: "color-mix(in srgb, var(--accent, #a1a1aa) 35%, transparent)",
       },
     });
     const addon = new FitAddon();
@@ -214,6 +222,7 @@
     next.onTitleChange((title: string) => {
       const t = title.trim();
       if (!t) return;
+      // OSC title from shell/prompt — keep as display name.
       rt.title = t;
       rt.titleCustom = true;
       runtimes = { ...runtimes };
@@ -348,12 +357,15 @@
     const cwd = resolveCwd(cwdKind);
     const id = newTabId();
     const createdAtMs = Date.now();
+    const title = nextSessionTitle(
+      Object.values(runtimes).map((r) => r.title),
+    );
     try {
       // Placeholder runtime so host mounts before pty_start sizing.
       const placeholder: TabRuntime = {
         id,
         ptyId: 0,
-        title: shellBasename(shell),
+        title,
         shellPath: shell,
         cwdHint: cwd,
         createdAtMs,
@@ -429,15 +441,10 @@
   async function closeTab(id: string) {
     const rt = runtimes[id];
     if (!rt) return;
-    if (
-      rt.titleCustom &&
-      typeof window !== "undefined" &&
-      !window.confirm(`Close terminal “${rt.title}”?`)
-    ) {
-      return;
-    }
     busy = true;
     errorText = "";
+    const neighbor =
+      activeTabId === id ? pickNeighborTabId(tabOrder, id) : activeTabId;
     try {
       if (rt.ptyId > 0 && sessionId && inTauriShell()) {
         await invoke("pty_terminate", { sessionId, ptyId: rt.ptyId });
@@ -451,7 +458,7 @@
       runtimes = next;
       tabOrder = tabOrder.filter((t) => t !== id);
       if (activeTabId === id) {
-        activeTabId = tabOrder[tabOrder.length - 1] ?? null;
+        activeTabId = neighbor && runtimes[neighbor] ? neighbor : null;
       }
       persistBook();
       busy = false;
@@ -461,6 +468,10 @@
           void fitAndResize(active);
           active.term?.focus();
         }
+      } else {
+        // Last session closed — dock may stay open with empty state.
+        // Next ⌘J (hide→show) or + creates a working terminal.
+        autoCreateTried = false;
       }
     }
   }
@@ -515,7 +526,9 @@
           nextRuntimes[id] = {
             id: tab.id,
             ptyId: tab.ptyId,
-            title: tab.title || shellBasename(tab.shellPath),
+            title: tab.title || nextSessionTitle(
+              Object.values(nextRuntimes).map((r) => r.title),
+            ),
             shellPath: tab.shellPath,
             cwdHint: tab.cwdHint,
             createdAtMs: tab.createdAtMs,
@@ -659,8 +672,8 @@
     disposed = false;
     const blob = loadDockBlob();
     heightPx = blob.dock.heightPx;
-    // Prefer already-open bind from page; only restore closed→open from prefs.
-    if (blob.dock.open) open = true;
+    // Restore presentation visibility exactly (hidden stays hidden).
+    open = blob.dock.open;
     prefsReady = true;
     void loadEnv();
     return () => {
@@ -717,16 +730,39 @@
           class:active={id === activeTabId}
           hidden={id !== activeTabId}
           role="tabpanel"
+          tabindex="-1"
           aria-labelledby={`terminal-tab-${id}`}
           use:hostAction={id}
           onclick={() => {
             selectTab(id);
             runtimes[id]?.term?.focus();
           }}
+          onkeydown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              selectTab(id);
+              runtimes[id]?.term?.focus();
+            }
+          }}
         ></div>
       {/each}
       {#if tabOrder.length === 0}
-        <div class="pty-empty" aria-hidden="true"></div>
+        <div class="pty-empty">
+          <EmptyState
+            icon="terminal"
+            title="No terminals"
+            description="Press + or ⌘J to start a shell."
+            compact
+          >
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy || !connected || !sessionId}
+              onclick={() => void createTerminal()}
+            >
+              New terminal
+            </Button>
+          </EmptyState>
+        </div>
       {/if}
     </div>
   </section>
@@ -808,6 +844,10 @@
   }
 
   .pty-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     height: 100%;
+    min-height: 0;
   }
 </style>

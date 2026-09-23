@@ -59,9 +59,12 @@ CI stays pinned.
 - [x] Activity cards + reducer merge; `session.svelte.ts` transcript store.
 - [x] **Extensions** Prefs panel — list / enable / disable / reload via public IPC.
 - [x] **ModelSelect** including `service_tier` from daemon model APIs.
-- [x] **PTY** daemon-owned; bottom multi-tab dock (≤8) with local
-      session book reconnect via `pty_status` + `pty_attach` (no `PtyList`
-      discovery UI). Collapse/hide does not terminate.
+- [x] **PTY** daemon-owned; bottom multi-tab dock (≤8). Single navigator:
+      horizontal tabs `Terminal | session N | +` only — no vertical session
+      list. ⌘J hide/show keeps PTYs; empty open → auto-create; × terminates
+      one PTY. Presentation prefs (open/height/order/active) in
+      `terminalDockPrefs`; reconnect via `pty_status` + `pty_attach`.
+      PtyList discovery still BLOCKED BY CORE (WIP IPC v15).
 - [x] Probe `failure_kind` honesty; CSP non-null; no-privilege selfcheck;
       Hello version / Incompatible warn on topbar.
 - [x] Perf baseline script; unit selfchecks (reducer, attachments, file-tree

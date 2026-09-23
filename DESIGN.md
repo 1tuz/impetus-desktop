@@ -83,5 +83,7 @@ Live capture `assets/qa/rail-expanded-ok.png` (rail open).
 | ID | Area | Fix |
 | --- | --- | --- |
 | T001 | Terminal region | Multi-tab bottom dock under `.stage-row` only (not right panel) |
-| T002 | Tab chrome | Horizontal tabs match RightPanel tokens (`--elevated`, `--muted`, `--radius-md`) |
+| T002 | Tab chrome | `Terminal` label + horizontal `session N` tabs; hide = chevron (≠ tab ×) |
 | T003 | Resize | `ns-resize` handle above tab bar; height + open persist in dock prefs |
+| T004 | ⌘J | Hide keeps PTYs; show restores active/order; empty → auto new PTY |
+| T005 | Empty | Last × may leave compact EmptyState; next ⌘J / + creates shell |

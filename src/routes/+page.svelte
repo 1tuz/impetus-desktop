@@ -165,7 +165,8 @@
   let appearance = $state<AppearancePref>(DEFAULT_APPEARANCE);
   let themeId = $state(DEFAULT_THEME_ID);
   let showPrefs = $state(false);
-  let terminalOpen = $state(true);
+  // Restored from dock prefs in TerminalPanel onMount (default closed).
+  let terminalOpen = $state(false);
   let rightPanelOpen = $state(true);
   let rightPanelTab = $state<"files" | "review" | "agents">("files");
 

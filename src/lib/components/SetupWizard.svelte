@@ -7,6 +7,7 @@
     socket_exists: boolean;
     reachable: boolean;
     detail: string;
+    provider_kind?: string;
   };
 
   let {
@@ -36,7 +37,8 @@
 
   $effect(() => {
     if (!open) return;
-    if (probe?.reachable && step === 0) step = 1;
+    // Advance after first probe — Connect can auto-ensure even when unreachable.
+    if (probe != null && step === 0) step = 1;
   });
 </script>
 
@@ -44,9 +46,9 @@
   <div class="shell-scrim">
     <Card class="setup-card" padding="lg">
       <p class="eyebrow">first run</p>
-      <h2 class="title">Connect to impetusd</h2>
+      <h2 class="title">Connect to Runtime</h2>
       <p class="lede">
-        Impetus Desktop talks to the local daemon over a Unix socket. No macOS privacy
+        Impetus Desktop talks to the local Runtime over a Unix socket. No macOS privacy
         permissions (Accessibility, Screen Recording, Full Disk) are required for this.
       </p>
 
@@ -54,16 +56,18 @@
         <li class:active={step === 0} class:done={step > 0}>
           <span class="n">1</span>
           <div>
-            <strong>Is the daemon running?</strong>
+            <strong>Runtime status</strong>
             <p class="muted">
               {#if probe}
                 {#if probe.reachable}
                   Socket reachable.
                 {:else}
                   {probe.detail}
+                  <br />
+                  Connect below starts Runtime automatically if needed.
                 {/if}
                 <br />
-                <code class="mono faint">{probe.socket_path}</code>
+                <code class="mono sock-path">{probe.socket_path}</code>
               {:else}
                 Probing socket…
               {/if}
@@ -77,11 +81,14 @@
           <span class="n">2</span>
           <div>
             <strong>Handshake</strong>
-            <p class="muted">Connect when the socket is up. You can also skip and connect later from the sidebar.</p>
+            <p class="muted">
+              Starts Runtime if needed, then connects. You can skip and continue —
+              the app will connect on its own after setup.
+            </p>
             <Button
               variant="primary"
               size="sm"
-              disabled={busy || !probe?.reachable}
+              disabled={busy}
               onclick={() => void connectThenFinish()}
             >
               <Icon name="plug" size={14} />
@@ -93,7 +100,7 @@
 
       <div class="setup-actions">
         <Button variant="ghost" onclick={onSkip}>Skip for now</Button>
-        <Button variant="secondary" disabled={!probe?.reachable} onclick={onFinish}>
+        <Button variant="secondary" onclick={onFinish}>
           Continue
         </Button>
       </div>
@@ -181,8 +188,9 @@
     font-size: var(--text-sm);
   }
 
-  .faint {
-    color: var(--faint);
+  /* Socket path — never --faint (fails contrast on dark packs; same as AppTopbar F001) */
+  .sock-path {
+    color: var(--muted);
   }
 
   .setup-actions {

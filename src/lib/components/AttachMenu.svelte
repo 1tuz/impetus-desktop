@@ -5,7 +5,18 @@
 
   type McpServerDto = {
     id: string;
+    name: string;
     transport_hint: string;
+    connected: boolean;
+  };
+
+  type ModelProviderDto = {
+    provider_id: string;
+    model_id: string;
+    health: string;
+    is_default: boolean;
+    provider_display_name?: string | null;
+    model_display_name?: string | null;
   };
 
   let {
@@ -30,6 +41,8 @@
   let mcpServers = $state<McpServerDto[]>([]);
   let mcpLoading = $state(false);
   let mcpError = $state("");
+  let mcpReloading = $state(false);
+  let modelLabel = $state("—");
 
   const filteredContext = $derived(filterItems(ATTACH_CONTEXT, query));
 
@@ -53,18 +66,61 @@
     onAction(id);
   }
 
-  async function openMcp() {
-    view = "mcp";
-    query = "";
+  async function refreshModels() {
+    if (!connected || !inTauriShell()) {
+      modelLabel = "—";
+      return;
+    }
+    try {
+      const providers = await invoke<ModelProviderDto[]>("list_models");
+      const def = providers.find((p) => p.is_default) ?? providers[0];
+      modelLabel = def
+        ? def.model_display_name?.trim() ||
+          def.model_id ||
+          def.provider_display_name?.trim() ||
+          def.provider_id
+        : "—";
+    } catch {
+      modelLabel = "—";
+    }
+  }
+
+  function inTauriShell(): boolean {
+    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  }
+
+  async function loadMcpServers() {
     mcpLoading = true;
     mcpError = "";
-    mcpServers = [];
     try {
+      // Daemon catalog only — never local Codex MCP config files.
       mcpServers = await invoke<McpServerDto[]>("list_mcp_servers");
     } catch (err) {
       mcpError = err instanceof Error ? err.message : String(err);
+      mcpServers = [];
     } finally {
       mcpLoading = false;
+    }
+  }
+
+  async function openMcp() {
+    view = "mcp";
+    query = "";
+    mcpServers = [];
+    await loadMcpServers();
+  }
+
+  /** Daemon `ReloadMcpServers` via Tauri `reload_mcp_servers`. */
+  async function reloadMcp() {
+    if (!inTauriShell() || mcpReloading) return;
+    mcpReloading = true;
+    mcpError = "";
+    try {
+      mcpServers = await invoke<McpServerDto[]>("reload_mcp_servers");
+    } catch (err) {
+      mcpError = err instanceof Error ? err.message : String(err);
+    } finally {
+      mcpReloading = false;
     }
   }
 
@@ -91,6 +147,7 @@
       view = "root";
       return;
     }
+    void refreshModels();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (view === "mcp") {
@@ -112,18 +169,28 @@
 {#if open}
   <div class="attach-menu" role="menu" aria-label="Attach">
     {#if view === "mcp"}
-      <button type="button" class="back" onclick={backToRoot}>
-        <Icon name="chevron-left" size={14} />
-        MCP servers
-      </button>
+      <div class="mcp-head">
+        <button type="button" class="back" onclick={backToRoot}>
+          <Icon name="chevron-left" size={14} />
+          MCP servers
+        </button>
+        <button
+          type="button"
+          class="reload"
+          disabled={mcpLoading || mcpReloading || !connected}
+          title="Reload MCP catalog from impetusd"
+          onclick={() => void reloadMcp()}
+        >
+          {mcpReloading ? "Reloading…" : "Reload MCP"}
+        </button>
+      </div>
       {#if mcpLoading}
         <p class="hint">Loading…</p>
       {:else if mcpError}
         <p class="hint">{mcpError}</p>
       {:else if mcpServers.length === 0}
         <p class="hint">
-          No MCP servers in ~/.codex/config.toml — add [mcp_servers.*] there (daemon
-          autoloads separately)
+          No MCP servers from daemon catalog — configure MCP on impetusd
         </p>
       {:else}
         <div class="group">
@@ -177,7 +244,7 @@
                 <span class="label">
                   {item.label}
                   {#if item.id === "model"}
-                    <span class="meta">Auto</span>
+                    <span class="meta">{modelLabel}</span>
                   {/if}
                   {#if item.id === "workspace" && workspaceRoot}
                     <span class="meta mono">{workspaceRoot.split("/").filter(Boolean).pop()}</span>
@@ -228,10 +295,17 @@
     border-color: transparent;
   }
 
+  .mcp-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
   .back {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
+    flex: 1;
     margin: 0;
     padding: var(--space-2) var(--space-3);
     border: 0;
@@ -247,6 +321,29 @@
   .back:hover {
     background: var(--elevated);
     color: var(--text);
+  }
+
+  .reload {
+    margin: 0;
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .reload:hover:not(:disabled) {
+    background: var(--elevated);
+    color: var(--text);
+  }
+
+  .reload:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .hint {

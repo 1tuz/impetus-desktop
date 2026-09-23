@@ -1763,11 +1763,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "impetus-daemon-control"
+version = "0.1.0"
+dependencies = [
+ "impetus-client",
+ "libc",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "impetus-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "impetus-client",
+ "impetus-daemon-control",
  "rfd",
  "serde",
  "serde_json",

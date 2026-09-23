@@ -1,0 +1,4 @@
+# Tauri externalBin artifacts (copied by scripts/prepare-impetusd-sidecar.sh)
+*
+!.gitignore
+!README.md

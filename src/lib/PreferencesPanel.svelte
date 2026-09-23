@@ -1,5 +1,6 @@
 <script lang="ts">
   import ShortcutsHint from "$lib/ShortcutsHint.svelte";
+  import ExtensionsPanel from "$lib/components/ExtensionsPanel.svelte";
   import { Button, Icon, Input } from "$lib/components/ui";
   import {
     DEFAULT_APPEARANCE,
@@ -17,29 +18,46 @@
     open = $bindable(false),
     socketPath = "",
     workspaceRoot = $bindable(""),
+    providerProfilePath = $bindable(""),
+    acpProfilePath = $bindable(""),
     packId = $bindable(DEFAULT_PACK_ID),
     appearance = $bindable<AppearancePref>(DEFAULT_APPEARANCE),
     themeId = $bindable(DEFAULT_THEME_ID),
     connected = false,
     busy = false,
+    providerKind = "unknown",
     onOpenSecurity,
     onResetSetup,
     onConnect,
     onDisconnect,
+    onRestartRuntime,
   }: {
     open?: boolean;
     socketPath?: string;
     workspaceRoot?: string;
+    providerProfilePath?: string;
+    acpProfilePath?: string;
     packId?: string;
     appearance?: AppearancePref;
     themeId?: string;
     connected?: boolean;
     busy?: boolean;
+    providerKind?: string;
     onOpenSecurity: () => void | Promise<void>;
     onResetSetup: () => void;
     onConnect: () => void | Promise<unknown>;
     onDisconnect: () => void | Promise<unknown>;
+    onRestartRuntime: () => void | Promise<unknown>;
   } = $props();
+
+  const PROVIDER_PROFILE_KEY = "impetus.desktop.provider_profile";
+  const ACP_PROFILE_KEY = "impetus.desktop.acp_profile";
+
+  function persistProfiles() {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(PROVIDER_PROFILE_KEY, providerProfilePath.trim());
+    localStorage.setItem(ACP_PROFILE_KEY, acpProfilePath.trim());
+  }
 
   function selectPack(id: string) {
     const next = applyThemePrefs(id, appearance);
@@ -82,9 +100,11 @@
       </div>
 
       <section class="block">
-        <div class="shell-label">Daemon</div>
+        <div class="shell-label">Runtime</div>
         <p class="hint">
-          {connected ? "Connected to impetusd" : "Offline — start impetusd, then Connect"}
+          {connected
+            ? `Connected to Runtime${providerKind !== "unknown" ? ` · ${providerKind}` : ""}`
+            : "Runtime connects automatically — use Restart Runtime below if stuck"}
         </p>
         <code class="mono socket selectable">{socketPath || "—"}</code>
         <div class="adv-row">
@@ -93,13 +113,49 @@
               Disconnect
             </Button>
           {:else}
-            <Button variant="primary" size="sm" disabled={busy} onclick={() => void onConnect()}>
+            <Button variant="ghost" size="sm" disabled={busy} onclick={() => void onConnect()}>
               <Icon name="plug" size={14} />
-              Connect
+              Reconnect
             </Button>
           {/if}
         </div>
+        <p class="hint" style="margin-top: var(--space-3)">
+          Optional profiles for real AI. Empty = <strong>mock</strong> provider — not a real
+          backend. Set only one path.
+        </p>
+        <Input
+          id="prefs-provider-profile"
+          mono
+          placeholder="/path/to/provider-profile.json"
+          bind:value={providerProfilePath}
+          onblur={persistProfiles}
+          onchange={persistProfiles}
+        />
+        <Input
+          id="prefs-acp-profile"
+          mono
+          placeholder="/path/to/acp-profile.json"
+          bind:value={acpProfilePath}
+          onblur={persistProfiles}
+          onchange={persistProfiles}
+        />
       </section>
+
+      <section class="block">
+        <div class="shell-label">Models</div>
+        <p class="hint">
+          Provider / model / reasoning live under the composer
+          (<code>ListModels</code> / <code>Get·SetSessionModel</code>). Prefs
+          do not keep a second copy of model state.
+        </p>
+      </section>
+
+      {#if connected}
+        <section class="block">
+          <div class="shell-label">Extensions</div>
+          <ExtensionsPanel {connected} {busy} />
+        </section>
+      {/if}
 
       <section class="block">
         <div class="shell-label">Workspace</div>
@@ -157,6 +213,14 @@
       <details class="advanced">
         <summary>Advanced</summary>
         <div class="adv-row">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onclick={() => void onRestartRuntime()}
+          >
+            Restart Runtime
+          </Button>
           <Button variant="ghost" size="sm" onclick={onResetSetup}>
             Show setup wizard again
           </Button>
@@ -165,8 +229,8 @@
           </Button>
         </div>
         <p class="hint">
-          Security pane is optional — not required for Connect / Prompt. Only opens on explicit
-          click here.
+          Restart Runtime is recovery when auto-connect fails. Security pane is optional —
+          not required for Connect / Prompt. Only opens on explicit click here.
         </p>
       </details>
     </div>

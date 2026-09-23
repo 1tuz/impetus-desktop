@@ -40,6 +40,8 @@
   let errorText = $state("");
   let busy = $state(false);
   let ptyId = $state<number | null>(null);
+  /** Last detached pty_id for this session — presentation memory (no PtyList IPC). */
+  let lastDetachedPtyId = $state<number | null>(null);
 
   let term: Terminal | null = null;
   let fit: FitAddon | null = null;
@@ -92,7 +94,7 @@
     next.loadAddon(addon);
     next.open(hostEl);
     addon.fit();
-    next.onData((data) => {
+    next.onData((data: string) => {
       void sendInput(data);
     });
     term = next;
@@ -168,7 +170,7 @@
 
   async function startShell() {
     if (!inTauriShell()) {
-      errorText = "PTY needs Tauri shell + live impetusd";
+      errorText = "PTY needs Tauri shell + live Runtime";
       return;
     }
     if (!connected || !sessionId) {
@@ -185,7 +187,8 @@
       const view = await invoke<PtySessionDto>("pty_start", {
         sessionId,
         command: "/bin/zsh",
-        args: ["-l"],
+        // Non-login argv — daemon refuses `-l` / `--login` (password-prompt surface).
+        args: [],
         workingDir: workspaceRoot.trim() || null,
         cols,
         rows,
@@ -212,9 +215,36 @@
       await invoke("pty_detach", { sessionId, ptyId });
       stopPoll();
       statusText = `pty ${ptyId} · detached`;
+      lastDetachedPtyId = ptyId;
       ptyId = null;
     } catch (err) {
       errorText = errorMessage(err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function reattachPty() {
+    if (!sessionId || !inTauriShell() || lastDetachedPtyId == null) return;
+    busy = true;
+    errorText = "";
+    try {
+      ensureTerm();
+      fit?.fit();
+      const view = await invoke<PtySessionDto>("pty_attach", {
+        sessionId,
+        ptyId: lastDetachedPtyId,
+      });
+      ptyId = view.pty_id;
+      lastDetachedPtyId = null;
+      statusText = `pty ${view.pty_id} · ${view.state} · reattached`;
+      term?.focus();
+      startPoll();
+      await drainOnce();
+      await fitAndResize();
+    } catch (err) {
+      errorText = errorMessage(err);
+      statusText = "reattach failed";
     } finally {
       busy = false;
     }
@@ -235,6 +265,20 @@
       busy = false;
     }
   }
+
+  let prevSessionId = $state<string | null>(null);
+
+  $effect(() => {
+    const sid = sessionId;
+    if (prevSessionId !== null && prevSessionId !== sid) {
+      stopPoll();
+      ptyId = null;
+      lastDetachedPtyId = null;
+      statusText = "idle";
+      errorText = "";
+    }
+    prevSessionId = sid;
+  });
 
   $effect(() => {
     if (open) {
@@ -272,7 +316,8 @@
           variant="ghost"
           size="sm"
           disabled={busy || !connected || !sessionId || ptyId !== null}
-          title="Start daemon-owned zsh PTY"
+          title="Start Runtime-owned zsh PTY"
+          aria-label="Start Runtime-owned zsh PTY"
           onclick={() => void startShell()}
         >
           <Icon name="terminal" size={14} />
@@ -281,8 +326,25 @@
         <Button
           variant="ghost"
           size="sm"
+          disabled={
+            busy ||
+            !connected ||
+            !sessionId ||
+            ptyId !== null ||
+            lastDetachedPtyId == null
+          }
+          title={lastDetachedPtyId != null
+            ? `Reattach pty ${lastDetachedPtyId}`
+            : "No detached PTY in this panel"}
+          onclick={() => void reattachPty()}
+        >
+          Reattach
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={busy || ptyId === null}
-          title="Detach PTY (daemon keeps process)"
+          title="Detach PTY (Runtime keeps process)"
           onclick={() => void detachPty()}
         >
           Detach

@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "bash scripts/prepare-impetusd-sidecar.sh && pnpm build",
     "frontendDist": "../build"
   },
   "app": {
@@ -22,14 +22,17 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' customprotocol: asset:; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: asset: http: https:; connect-src ipc: http://ipc.localhost"
     }
   },
-  "bundle": {
+    "bundle": {
     "active": true,
     "targets": [
       "app",
       "dmg"
+    ],
+    "externalBin": [
+      "binaries/impetusd"
     ],
     "macOS": {
       "minimumSystemVersion": "15.0"

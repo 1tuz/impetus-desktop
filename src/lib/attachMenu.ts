@@ -38,7 +38,7 @@ export const ATTACH_CONTEXT: AttachItem[] = [
   {
     id: "model",
     label: "Model",
-    description: "Auto",
+    description: "Composer Provider / Model / Reasoning",
     kind: "context",
   },
   {

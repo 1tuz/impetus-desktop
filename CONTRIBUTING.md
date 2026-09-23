@@ -59,7 +59,7 @@ git config core.hooksPath .githooks
 Validate a subject without committing:
 
 ```zsh
-python3 scripts/check-commit-subject.py --message 'feat: wire live transcript (refs #310)'
+python3 scripts/check-commit-subject.py --message 'feat: wire live transcript (refs #315)'
 ```
 
 Update `.github/workflows/ci.yml` when changing the merge gate.

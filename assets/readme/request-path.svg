@@ -1,26 +1,88 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="220" viewBox="0 0 1200 220" role="img" aria-labelledby="flow-title flow-desc">
-  <title id="flow-title">Desktop request path</title>
-  <desc id="flow-desc">Impetus Desktop sends typed Tauri commands to a Unix-socket HarnessClient; impetusd owns sessions, events, policy, and secrets.</desc>
-  <rect width="1200" height="220" rx="20" fill="#09090b"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="420" viewBox="0 0 1320 420" role="img" aria-labelledby="flow-title flow-desc">
+  <title id="flow-title">Impetus Desktop request and lifecycle paths</title>
+  <desc id="flow-desc">Request path: Desktop UI to Tauri typed bridge to HarnessClient to Unix IPC negotiate 12..=14 to impetusd. Lifecycle: Tauri typed bridge to impetus-daemon-control to impetusd. GUI is replaceable; Runtime impetusd is authoritative.</desc>
+  <rect width="1320" height="420" rx="20" fill="#09090b"/>
   <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
-    <rect x="48" y="56" width="240" height="108" rx="14" fill="#18181b" stroke="#3f3f46"/>
-    <text x="168" y="100" text-anchor="middle" fill="#fafafa" font-size="22" font-weight="600">Desktop UI</text>
-    <text x="168" y="128" text-anchor="middle" fill="#71717a" font-size="15">Tauri · Svelte</text>
 
-    <path d="M304 110H360" stroke="#52525b" stroke-width="2"/>
-    <polygon points="360,104 376,110 360,116" fill="#52525b"/>
-    <text x="340" y="98" text-anchor="middle" fill="#71717a" font-size="12" font-family="ui-monospace, Menlo, monospace">invoke</text>
+    <!-- Row label: Request -->
+    <text x="36" y="36" fill="#71717a" font-size="12" font-weight="600" letter-spacing="1.5" font-family="ui-monospace, Menlo, monospace">REQUEST PATH</text>
+    <text x="1284" y="36" text-anchor="end" fill="#52525b" font-size="12">GUI replaceable · Runtime authoritative</text>
 
-    <rect x="392" y="56" width="240" height="108" rx="14" fill="#18181b" stroke="#3f3f46"/>
-    <text x="512" y="100" text-anchor="middle" fill="#fafafa" font-size="22" font-weight="600">HarnessClient</text>
-    <text x="512" y="128" text-anchor="middle" fill="#71717a" font-size="15">Unix socket IPC</text>
+    <!-- Desktop UI -->
+    <rect x="28" y="52" width="176" height="100" rx="14" fill="#18181b" stroke="#3f3f46"/>
+    <text x="116" y="92" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="600">Desktop UI</text>
+    <text x="116" y="116" text-anchor="middle" fill="#71717a" font-size="13">Svelte · view</text>
+    <text x="116" y="136" text-anchor="middle" fill="#52525b" font-size="11">replaceable</text>
 
-    <path d="M648 110H704" stroke="#52525b" stroke-width="2"/>
-    <polygon points="704,104 720,110 704,116" fill="#52525b"/>
-    <text x="684" y="98" text-anchor="middle" fill="#71717a" font-size="12" font-family="ui-monospace, Menlo, monospace">v7</text>
+    <path d="M216 102H248" stroke="#52525b" stroke-width="2"/>
+    <polygon points="248,96 264,102 248,108" fill="#52525b"/>
+    <text x="240" y="90" text-anchor="middle" fill="#71717a" font-size="11" font-family="ui-monospace, Menlo, monospace">invoke</text>
 
-    <rect x="736" y="56" width="416" height="108" rx="14" fill="#18181b" stroke="#a1a1aa" stroke-width="1.5"/>
-    <text x="944" y="96" text-anchor="middle" fill="#fafafa" font-size="22" font-weight="600">impetusd</text>
-    <text x="944" y="124" text-anchor="middle" fill="#a1a1aa" font-size="15">sessions · events · policy · Keychain refs</text>
+    <!-- Tauri typed bridge -->
+    <rect x="280" y="52" width="200" height="100" rx="14" fill="#18181b" stroke="#3f3f46"/>
+    <text x="380" y="92" text-anchor="middle" fill="#fafafa" font-size="17" font-weight="600">Tauri bridge</text>
+    <text x="380" y="116" text-anchor="middle" fill="#71717a" font-size="13">typed commands</text>
+    <text x="380" y="136" text-anchor="middle" fill="#52525b" font-size="11">shell only</text>
+
+    <path d="M492 102H524" stroke="#52525b" stroke-width="2"/>
+    <polygon points="524,96 540,102 524,108" fill="#52525b"/>
+
+    <!-- HarnessClient -->
+    <rect x="556" y="52" width="200" height="100" rx="14" fill="#18181b" stroke="#3f3f46"/>
+    <text x="656" y="92" text-anchor="middle" fill="#fafafa" font-size="17" font-weight="600">HarnessClient</text>
+    <text x="656" y="116" text-anchor="middle" fill="#71717a" font-size="13">impetus-client</text>
+    <text x="656" y="136" text-anchor="middle" fill="#52525b" font-size="11">path dep</text>
+
+    <path d="M768 102H800" stroke="#52525b" stroke-width="2"/>
+    <polygon points="800,96 816,102 800,108" fill="#52525b"/>
+
+    <!-- Unix IPC -->
+    <rect x="832" y="60" width="168" height="84" rx="14" fill="#18181b" stroke="#52525b"/>
+    <text x="916" y="96" text-anchor="middle" fill="#fafafa" font-size="15" font-weight="600">Unix IPC</text>
+    <text x="916" y="118" text-anchor="middle" fill="#a1a1aa" font-size="12" font-family="ui-monospace, Menlo, monospace">negotiate</text>
+    <text x="916" y="136" text-anchor="middle" fill="#71717a" font-size="12" font-family="ui-monospace, Menlo, monospace">12..=14</text>
+
+    <path d="M1012 102H1044" stroke="#52525b" stroke-width="2"/>
+    <polygon points="1044,96 1060,102 1044,108" fill="#52525b"/>
+
+    <!-- impetusd (request) -->
+    <rect x="1076" y="52" width="216" height="100" rx="14" fill="#18181b" stroke="#a1a1aa" stroke-width="1.5"/>
+    <text x="1184" y="88" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="600">impetusd</text>
+    <text x="1184" y="112" text-anchor="middle" fill="#a1a1aa" font-size="12">sessions · events · policy</text>
+    <text x="1184" y="132" text-anchor="middle" fill="#71717a" font-size="11">Runtime · authoritative</text>
+
+    <!-- Divider -->
+    <path d="M28 188H1292" stroke="#27272a" stroke-width="1"/>
+
+    <!-- Row label: Lifecycle -->
+    <text x="36" y="220" fill="#71717a" font-size="12" font-weight="600" letter-spacing="1.5" font-family="ui-monospace, Menlo, monospace">LIFECYCLE</text>
+    <text x="1284" y="220" text-anchor="end" fill="#52525b" font-size="12">ensure Runtime on open → Connected</text>
+
+    <!-- Tauri bridge (lifecycle) -->
+    <rect x="200" y="244" width="220" height="100" rx="14" fill="#18181b" stroke="#3f3f46"/>
+    <text x="310" y="284" text-anchor="middle" fill="#fafafa" font-size="17" font-weight="600">Tauri bridge</text>
+    <text x="310" y="308" text-anchor="middle" fill="#71717a" font-size="13">ensure_runtime</text>
+    <text x="310" y="328" text-anchor="middle" fill="#52525b" font-size="11">typed command</text>
+
+    <path d="M432 294H480" stroke="#52525b" stroke-width="2"/>
+    <polygon points="480,288 496,294 480,300" fill="#52525b"/>
+
+    <!-- impetus-daemon-control -->
+    <rect x="512" y="244" width="280" height="100" rx="14" fill="#18181b" stroke="#3f3f46"/>
+    <text x="652" y="284" text-anchor="middle" fill="#fafafa" font-size="16" font-weight="600">impetus-daemon-control</text>
+    <text x="652" y="308" text-anchor="middle" fill="#71717a" font-size="13">shared ensure · spawn</text>
+    <text x="652" y="328" text-anchor="middle" fill="#52525b" font-size="11">no PrivilegedHelper</text>
+
+    <path d="M804 294H852" stroke="#52525b" stroke-width="2"/>
+    <polygon points="852,288 868,294 852,300" fill="#52525b"/>
+
+    <!-- impetusd (lifecycle) -->
+    <rect x="884" y="244" width="236" height="100" rx="14" fill="#18181b" stroke="#a1a1aa" stroke-width="1.5"/>
+    <text x="1002" y="284" text-anchor="middle" fill="#fafafa" font-size="18" font-weight="600">impetusd</text>
+    <text x="1002" y="308" text-anchor="middle" fill="#a1a1aa" font-size="12">Runtime process</text>
+    <text x="1002" y="328" text-anchor="middle" fill="#71717a" font-size="11">socket ready · authoritative</text>
+
+    <!-- Footer -->
+    <text x="660" y="390" text-anchor="middle" fill="#52525b" font-size="12" font-family="ui-monospace, Menlo, monospace">IPC_VERSION=14 · IPC_MIN_SUPPORTED=12 · GUI ≠ Runtime</text>
   </g>
 </svg>

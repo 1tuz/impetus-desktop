@@ -17,12 +17,20 @@ in the same change. Stale documentation is a bug. `TODO.md` = open work only
 (no `[x]` with Partial tails). Mark `[x]` only when the vertical slice works
 in the real app against a live `impetusd`.
 
+UI / visual polish: read `DESIGN.md` (token pointers + Visual QA log). Do not
+invent a second design system beside `src/app.css` / `src/lib/tokens/`.
+
 ## Immovable Boundaries
 
 - Thin shell: view + typed Tauri commands over Unix-socket IPC to `impetusd`.
   Window never owns session SQLite, Keychain secrets, or policy.
-- Prefer wiring existing `DesktopHarness` / `HarnessClient` APIs over new UI
-  chrome. Do not invent daemon capabilities the harness does not expose.
+- Prefer wiring existing `HarnessClient` APIs over new UI chrome. Do not invent
+  daemon capabilities the harness does not expose. There is no
+  `DesktopHarness` / `impetus-desktop-adapter` crate — only path-dep
+  `impetus-client` + `impetus-daemon-control` + Tauri commands in
+  `src-tauri/src/commands/harness.rs`. Lifecycle (flock / spawn / readiness)
+  lives in shared `impetus-daemon-control`; Desktop only resolves the binary
+  and optional provider profiles.
 - Do not auto-open macOS Security / TCC on launch; setup wizard or Prefs
   “later” only. Hotkey list lives in Preferences, not chrome.
 - Secrets: never commit tokens/keys/passphrases; only opaque refs from daemon.
@@ -64,8 +72,7 @@ On `src-tauri/Cargo.toml` or `src-tauri/Cargo.lock` changes, also run
 - Rust/security jobs check out sibling [`1tuz/impetus`](https://github.com/1tuz/impetus)
   next to this repo so `src-tauri` path dep
   `../../impetus/crates/impetus-client` resolves (same layout as local
-  `Documents/projects/{impetus,impetus-desktop}`). Checkout `ref` =
-  `.github/impetus-revision` (IPC pin; currently v12 PTY).
+  `Documents/projects/{impetus,impetus-desktop}`).
 - Preview scope: `BASE_REF=origin/main ./scripts/ci-affected.sh`
 - Selector self-check: `./scripts/tests/ci-affected.sh`
 - No pages/release workflows in this repo (desktop ships as DMG/local build).

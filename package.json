@@ -10,18 +10,16 @@
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "test": "node --experimental-strip-types scripts/attach-menu-selfcheck.ts && node --experimental-strip-types scripts/theme-pack-selfcheck.ts && node --experimental-strip-types scripts/harness-ipc-selfcheck.ts && node --experimental-strip-types scripts/chrome-connect-selfcheck.ts",
+    "test": "node --experimental-strip-types scripts/attach-menu-selfcheck.ts && node --experimental-strip-types scripts/theme-pack-selfcheck.ts && node --experimental-strip-types scripts/harness-ipc-selfcheck.ts && node --experimental-strip-types scripts/chrome-connect-selfcheck.ts && node --experimental-strip-types scripts/event-reducer-selfcheck.ts && node --experimental-strip-types scripts/activity-card-selfcheck.ts && node --experimental-strip-types scripts/attachment-lifecycle-selfcheck.ts && node --experimental-strip-types scripts/file-tree-boundary-selfcheck.ts && node --experimental-strip-types scripts/child-runs-selfcheck.ts && node --experimental-strip-types scripts/text-preview-selfcheck.ts && node --experimental-strip-types scripts/sent-attach-selfcheck.ts && node --experimental-strip-types scripts/model-select-selfcheck.ts && node --experimental-strip-types scripts/no-privilege-selfcheck.ts && node --experimental-strip-types scripts/extensions-selfcheck.ts && node --experimental-strip-types scripts/session-rail-selfcheck.ts",
     "verify": "pnpm check && pnpm test",
+    "perf:baseline": "bash scripts/perf-baseline.sh",
     "tauri": "tauri"
   },
   "license": "MIT",
   "dependencies": {
-    "@internationalized/date": "^3.12.4",
-    "@lucide/svelte": "^1.47.0",
     "@tauri-apps/api": "^2",
     "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "bits-ui": "^2.19.2"
+    "@xterm/xterm": "^6.0.0"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",

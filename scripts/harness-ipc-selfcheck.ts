@@ -48,7 +48,12 @@ check("Rust exposes subscribe / mode / intent / approval detail", () => {
     "set_execution_mode",
     "get_execution_mode",
     "get_approval_detail",
+    "list_child_runs",
+    "get_child_run",
     "send_message_with_intent",
+    "upload_artifact",
+    "open_external",
+    "read_workspace_file",
   ]) {
     if (!harness.includes(name)) {
       throw new Error(`harness.rs missing ${name}`);
@@ -59,10 +64,18 @@ check("Rust exposes subscribe / mode / intent / approval detail", () => {
     "set_execution_mode",
     "get_execution_mode",
     "get_approval_detail",
+    "list_child_runs",
+    "get_child_run",
+    "upload_artifact",
+    "open_external",
+    "read_workspace_file",
   ]) {
     if (!lib.includes(`commands::${name}`)) {
       throw new Error(`lib.rs does not register ${name}`);
     }
+  }
+  if (!harness.includes("ArtifactRefDto") || !harness.includes("artifact: Option<ArtifactRefDto>")) {
+    throw new Error("send_prompt must accept optional ArtifactRefDto");
   }
 });
 
@@ -75,6 +88,22 @@ check("UI starts live subscribe and listens for harness://events", () => {
   }
   if (!page.includes("send_prompt") || !page.includes("intent")) {
     throw new Error("page send_prompt path missing intent");
+  }
+  if (
+    !(page.includes("applyHarnessEvent") || page.includes("applyEvent")) ||
+    !page.includes("afterSeq")
+  ) {
+    throw new Error("page must use reducer + afterSeq cursor (not blind afterSeq:0 only)");
+  }
+  if (
+    !page.includes("createSessionStore") &&
+    !page.includes("createSessionTranscript") &&
+    !page.includes("applyHarnessEvent")
+  ) {
+    throw new Error("page must wire harnessEventReducer (direct or via session store)");
+  }
+  if (page.includes("!messages.some((m) => m.role === \"user\" && m.text === text)")) {
+    throw new Error("page still text-dedupes user intents");
   }
 });
 
@@ -127,11 +156,63 @@ check("PTY Tauri cmds registered and TerminalPanel wired", () => {
   if (!panel.includes('"pty_start"')) {
     throw new Error("TerminalPanel never invokes pty_start");
   }
+  if (panel.includes('args: ["-l"]') || panel.includes("args: ['-l']")) {
+    throw new Error("TerminalPanel must not pass login argv -l (daemon refuses)");
+  }
+  if (!panel.includes("args: []")) {
+    throw new Error("TerminalPanel should start shell with empty args (non-login)");
+  }
   if (!panel.includes("pty_output") || !panel.includes("pty_input")) {
     throw new Error("TerminalPanel missing output poll or input");
   }
+  if (!panel.includes("pty_attach") || !panel.includes("reattachPty")) {
+    throw new Error("TerminalPanel missing reattach via pty_attach");
+  }
   if (!page.includes("TerminalPanel")) {
     throw new Error("page does not mount TerminalPanel");
+  }
+});
+
+check("ensure_runtime + impetus-daemon-control", () => {
+  if (!harness.includes("pub async fn ensure_runtime")) {
+    throw new Error("harness.rs missing ensure_runtime");
+  }
+  if (!lib.includes("commands::ensure_runtime")) {
+    throw new Error("lib.rs does not register ensure_runtime");
+  }
+  if (
+    !harness.includes("ensure_daemon_running_with") &&
+    !harness.includes("impetus_daemon_control")
+  ) {
+    throw new Error("ensure path must use impetus-daemon-control");
+  }
+  // Production body only — unit tests may mention forbidden APIs as negative asserts.
+  const prod = harness.split("\n#[cfg(test)]")[0] ?? harness;
+  if (prod.includes("create_new(true)")) {
+    throw new Error("Desktop must not own spawn.lock create");
+  }
+  if (!page.includes("ensure_runtime") && !page.includes("ensureRuntimeThenConnect")) {
+    throw new Error("page missing ensure runtime path");
+  }
+});
+
+check("extension package IPC registered (no local manifest)", () => {
+  for (const name of [
+    "list_extension_packages",
+    "get_extension_package",
+    "enable_extension_package",
+    "disable_extension_package",
+    "reload_extension_packages",
+  ]) {
+    if (!harness.includes(`pub async fn ${name}`)) {
+      throw new Error(`harness.rs missing ${name}`);
+    }
+    if (!lib.includes(`commands::${name}`)) {
+      throw new Error(`lib.rs does not register ${name}`);
+    }
+  }
+  if (harness.includes("extension.toml") || harness.includes("ExtensionPackageManifest")) {
+    throw new Error("Desktop must not parse extension manifests");
   }
 });
 

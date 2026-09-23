@@ -46,7 +46,11 @@ while IFS= read -r f; do
       frontend=true
       rust=true
       ;;
-    # Tooling / hooks / non-CI scripts — no compile.
+    # Frontend selfchecks must run `pnpm test` (not docs_only).
+    scripts/*selfcheck.ts|scripts/tests/*)
+      frontend=true
+      ;;
+    # Tooling / hooks / other scripts — no compile.
     .githooks/*|scripts/*|.vscode/*)
       ;;
   esac

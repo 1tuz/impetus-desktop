@@ -1,12 +1,16 @@
 /**
- * Composer image chips — Cursor-style thumbnails before send.
+ * Composer attachment chips — images + file refs before send.
  */
+
+export type AttachmentKind = "image" | "file";
 
 export type ComposerAttachment = {
   id: string;
   name: string;
   mime: string;
-  /** Object URL or asset:// preview for <img>. */
+  kind?: AttachmentKind;
+  sizeBytes?: number;
+  /** Object URL or asset:// preview for <img>. Empty for file chips. */
   previewUrl: string;
   /** Filesystem path when known (drop / saved paste). */
   path?: string;
@@ -14,7 +18,13 @@ export type ComposerAttachment = {
   revokeOnClear: boolean;
 };
 
+/** Large paste / file → path-based `upload_artifact` (avoid huge JS number[]). */
+export const ARTIFACT_UPLOAD_THRESHOLD = 64 * 1024;
+
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
+
+const TEXT_PREVIEW_EXT =
+  /\.(txt|md|markdown|rs|js|mjs|cjs|jsx|ts|tsx|json|yaml|yml|toml|py|go|sh|bash|zsh|fish|conf|cfg|ini|env|html|htm|css|svg|c|h|cpp|hpp|java|kt|rb|php|sql|xml)$/i;
 
 export function isImagePath(path: string): boolean {
   return IMAGE_EXT.test(path);
@@ -22,6 +32,24 @@ export function isImagePath(path: string): boolean {
 
 export function isImageMime(mime: string): boolean {
   return mime.toLowerCase().startsWith("image/");
+}
+
+export function isTextPreviewPath(path: string): boolean {
+  return TEXT_PREVIEW_EXT.test(path);
+}
+
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10_240 ? 1 : 0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(n < 10_485_760 ? 1 : 0)} MB`;
+}
+
+export function shouldUploadArtifact(att: ComposerAttachment): boolean {
+  const size = att.sizeBytes ?? 0;
+  if (size >= ARTIFACT_UPLOAD_THRESHOLD) return true;
+  if ((att.kind ?? "image") === "file" && size > 0) return true;
+  return false;
 }
 
 export function extFromMime(mime: string): string {
@@ -58,7 +86,38 @@ export function attachmentFromPath(
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
     mime: `image/${ext === "jpg" ? "jpeg" : ext}`,
+    kind: "image",
     previewUrl,
+    path,
+    revokeOnClear: false,
+  };
+}
+
+export function attachmentFromFilePath(
+  path: string,
+  sizeBytes?: number,
+  mime?: string,
+): ComposerAttachment {
+  const name = path.split("/").filter(Boolean).pop() ?? path;
+  const ext = name.includes(".")
+    ? name.slice(name.lastIndexOf(".") + 1).toLowerCase()
+    : "";
+  const guessed =
+    mime?.trim() ||
+    (ext === "json"
+      ? "application/json"
+      : ext === "md" || ext === "markdown"
+        ? "text/markdown"
+        : isTextPreviewPath(path)
+          ? "text/plain"
+          : "application/octet-stream");
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    mime: guessed,
+    kind: "file",
+    sizeBytes,
+    previewUrl: "",
     path,
     revokeOnClear: false,
   };
@@ -70,13 +129,16 @@ export function attachmentFromBlob(
   path?: string,
 ): ComposerAttachment {
   const mime = file.type || "image/png";
+  const image = isImageMime(mime);
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
     mime,
-    previewUrl: URL.createObjectURL(file),
+    kind: image ? "image" : "file",
+    sizeBytes: file.size,
+    previewUrl: image ? URL.createObjectURL(file) : "",
     path,
-    revokeOnClear: true,
+    revokeOnClear: image,
   };
 }
 
@@ -93,8 +155,42 @@ export function mergeAttachmentsIntoPrompt(
 
 export function revokeAttachments(attachments: ComposerAttachment[]): void {
   for (const a of attachments) {
-    if (a.revokeOnClear) URL.revokeObjectURL(a.previewUrl);
+    if (a.revokeOnClear && a.previewUrl) URL.revokeObjectURL(a.previewUrl);
   }
+}
+
+/**
+ * Snapshot chip meta for a sent user bubble.
+ * Drops revokeOnClear object URLs — use path + convertFileSrc after send.
+ */
+export function userMsgWithAttachments(
+  text: string,
+  attachments: ComposerAttachment[],
+): {
+  text: string;
+  attachments?: Array<{
+    name: string;
+    path?: string;
+    previewUrl?: string;
+    mime?: string;
+  }>;
+} {
+  if (attachments.length === 0) return { text };
+  return {
+    text,
+    attachments: attachments.map((a) => {
+      const ref: {
+        name: string;
+        path?: string;
+        previewUrl?: string;
+        mime?: string;
+      } = { name: a.name };
+      if (a.path) ref.path = a.path;
+      if (a.mime) ref.mime = a.mime;
+      if (a.previewUrl && !a.revokeOnClear) ref.previewUrl = a.previewUrl;
+      return ref;
+    }),
+  };
 }
 
 export function ensureImageFile(file: File, mimeHint?: string): File {
@@ -141,7 +237,10 @@ export async function readImagesFromClipboardApi(): Promise<File[]> {
       if (!types.length) continue;
       const preferred =
         types.find((t) =>
-          t === "image/png" || t === "image/jpeg" || t === "image/webp" || t === "image/gif",
+          t === "image/png" ||
+          t === "image/jpeg" ||
+          t === "image/webp" ||
+          t === "image/gif",
         ) ?? types[0]!;
       const blob = await item.getType(preferred);
       const ext = extFromMime(preferred);
@@ -186,9 +285,25 @@ export function assertComposerAttachmentsContract(): void {
   if (isImagePath("/tmp/a.rs")) throw new Error("rs must not be image");
   if (!isImageMime("image/png")) throw new Error("mime image/png");
   if (extFromMime("image/jpeg") !== "jpg") throw new Error("jpeg→jpg");
+  if (!isTextPreviewPath("/x/foo.rs") || !isTextPreviewPath("/x/a.yaml")) {
+    throw new Error("text preview ext");
+  }
+  if (isTextPreviewPath("/x/a.bin")) throw new Error("bin not text");
+  if (formatBytes(512) !== "512 B") throw new Error("formatBytes B");
   const parts = partitionPaths(["/a.png", "/b.rs", "/c.webp"]);
   if (parts.images.join() !== "/a.png,/c.webp" || parts.other.join() !== "/b.rs") {
     throw new Error("partitionPaths failed");
+  }
+  const fileAtt = attachmentFromFilePath("/tmp/x.rs", 100);
+  if (fileAtt.kind !== "file" || fileAtt.name !== "x.rs") {
+    throw new Error("attachmentFromFilePath");
+  }
+  if (
+    !shouldUploadArtifact(
+      attachmentFromFilePath("/tmp/y.rs", ARTIFACT_UPLOAD_THRESHOLD),
+    )
+  ) {
+    throw new Error("should upload at threshold");
   }
   const merged = mergeAttachmentsIntoPrompt("hi", [
     attachmentFromPath("/tmp/x.png", "asset://x"),
@@ -202,5 +317,28 @@ export function assertComposerAttachmentsContract(): void {
   const fixed = ensureImageFile(blank, "image/png");
   if (fixed.type !== "image/png" || fixed.name !== "paste.png") {
     throw new Error("ensureImageFile must fill empty mime/name");
+  }
+  const snap = userMsgWithAttachments("hi", [
+    attachmentFromPath("/tmp/x.png", "asset://x"),
+    {
+      ...attachmentFromBlob(
+        new Blob([new Uint8Array([1])], { type: "image/png" }),
+        "paste.png",
+        "/tmp/p.png",
+      ),
+      revokeOnClear: true,
+    },
+  ]);
+  if (!snap.attachments || snap.attachments.length !== 2) {
+    throw new Error("userMsgWithAttachments length");
+  }
+  if (snap.attachments[0]?.previewUrl !== "asset://x") {
+    throw new Error("keep non-revoke previewUrl");
+  }
+  if (snap.attachments[1]?.previewUrl) {
+    throw new Error("drop revokeOnClear previewUrl");
+  }
+  if (snap.attachments[1]?.path !== "/tmp/p.png") {
+    throw new Error("keep path for convertFileSrc");
   }
 }

@@ -1,107 +1,131 @@
 # Impetus Desktop backlog
 
-Thin Tauri/Svelte shell over harness IPC. Daemon truth + terminal backlog =
+Thin Tauri/Svelte shell over harness IPC. Daemon truth =
 sibling [`impetus`](../impetus) (`TODO.md`, `ARCHITECTURE.md`).
 
 **Rules**
 
-- Mark `[x]` only when the vertical slice works in the real app against a live
-  `impetusd` (not mock-only, not web-preview-only).
-- Prefer wiring existing `DesktopHarness` / `HarnessClient` APIs over new UI
-  chrome. Stale “#308 unsupported” comments after IPC v7 rebase = bug.
-- Hotkey chrome stays out of the main UI; list lives in Preferences only.
+- Status words only: **DONE** / **PARTIAL** / **OPEN** / **BLOCKED BY CORE**.
+- Mark DONE only when the vertical slice works in the real app against a live
+  `impetusd` (not mock-only, not web-preview-only). PARTIAL = wire/UI present;
+  live E2E still thin or unit-only.
+- Prefer wiring existing `HarnessClient` APIs. Do not invent daemon
+  capabilities. No `DesktopHarness` / `impetus-desktop-adapter` — path-dep
+  `impetus-client` + Tauri `harness.rs` only.
+- Hotkey list lives in Preferences only.
+- Privilege: Desktop + `impetusd` as normal user — no PrivilegedHelper /
+  LaunchDaemon / admin password for Connect or socket IPC.
 
 ---
 
-## Now
+## Compatibility
 
-### P0 — talk to current daemon
+| Fact | Value |
+| --- | --- |
+| Wire | Negotiate overlap — Core `IPC_VERSION=14`, `IPC_MIN_SUPPORTED=12` |
+| Path dep | `src-tauri/Cargo.toml` → `../../impetus/crates/impetus-client` |
+| Daemon control | `impetus-daemon-control` via `ensure_daemon_running_with` + `discover_socket_path` (no local `spawn.lock` create) |
+| CI pin | `.github/impetus-revision` = `7dc456a0062fd61c9d47d1abe2fed76fec56a12c` |
+| Thin boundary | UI · view state · typed Tauri · HarnessClient only |
 
-- [x] Rebase path-dep off `impetus-wt-310-gui-adapter` (IPC **v5**) onto main
-      `impetus` / merged adapter (IPC **v7**). Hello is exact-match — v5 client
-      vs main `impetusd` hard-fails.
-- [x] Live transcript: `subscribe_live` → Tauri events → streaming chunks/tools
-      in UI (replace status-string “assistant” after send).
-      *(Wire + UI done; mark live-daemon smoke when you confirm against `impetusd`.)*
-- [x] Approval cards from events (`GetApprovalDetail` / pending id) — drop
-      manual UUID paste in Composer.
-      *(Auto-fill from events; paste field kept as fallback.)*
-
-### P1 — parity with TUI intents (APIs already on main)
-
-- [x] `set` / `get_execution_mode` Tauri + ModeSelect; delete prompt-banner
-      ceiling in `agentModes.ts`.
-- [x] Prompt intents: Steer / FollowUp (`UserPromptIntent`) + hotkeys
-      (TUI: `Ctrl+T`, `Ctrl+Shift+P`).
-- [x] Stop hotkey while busy (Esc or ⌘. — today Composer Stop button only).
-
-### P2 — attach / stubs honesty
-
-- [ ] Artifact upload for large paste (TUI pattern) where path-in-prompt is weak.
-- [x] MCP attach: list from `~/.codex/config.toml` / `IMPETUS_MCP_CONFIG` via
-      `list_mcp_servers` (honest — not daemon ListMcp IPC). Inserts `MCP: <id>`.
-- [ ] Model picker: still Auto stub until ListModels IPC exists.
-
-### P3 — optional / later
-
-- [ ] Fork / checkpoint / `ListChildRuns` thin UI (client APIs on main).
-- [ ] Command palette (⌘K today = focus prompt only; TUI has `Ctrl+P`).
-- [x] Git branch picker under composer (Cursor-like; `git_*` Tauri commands).
-- [ ] DMG install smoke checklist in README (App + Applications symlink).
-
-### Terminal / PTY — unblocked (IPC v12)
-
-Harness: real PTY IPC (`PtyStart`/`Attach`/`Input`/`Output`/`Resize`/
-`Detach`/`Terminate`/`Status`) with `session_id` ownership. Desktop wires
-thin xterm.js over Tauri → `HarnessClient` (no Desktop-only PTY).
-
-- [x] Tauri cmds: `pty_start` / `attach` / `input` / `output` / `resize` /
-      `detach` / `terminate` / `status` (all pass `session_id`).
-- [x] Minimal `TerminalPanel` (xterm.js): Start zsh, poll output, input,
-      Detach/Kill. Toggle: topbar icon or Ctrl+`.
-- [ ] Live attach of previously detached `pty_id` UI (API wired; no picker yet).
-- [ ] Live-daemon smoke: Start → type → Detach against `impetusd` at
-      `.github/impetus-revision` (PR #319 / IPC v12).
-  - Requires sibling `impetus` at pinned rev (path-dep); CloseRouter unrelated.
+Bump pin when Desktop needs a new client API. Local path-dep floats sibling tip;
+CI stays pinned.
 
 ---
 
-## Done (do not re-litigate)
+## DONE
 
-- Connect / probe / setup wizard (no auto-TCC)
-- Topbar Connected/Offline + Connect / Start daemon / Disconnect (single CTA;
-  rail foot is Preferences only)
-- New Chat ⌘N + workspace folder-plus / ⌘O (`pick_folder`)
-- Attach files ⌘G (`pick_files` real paths) + image paste/drop thumbs
-- `cancel_session` + Composer Stop
-- Approve/reject IPC (auto id from events; paste fallback)
-- Themes (≥2 packs, Prefs) + ⌘⇧T cycle
-- Hotkeys in Prefs only (`HOTKEY_HELP`); rail without kbd chrome
-- Cursor-density chrome (rail / topbar / floating composer)
-- Path-dep IPC **v7** + `subscribe_session_events` / execution mode / prompt intent
-- Live CLI smoke vs `impetusd` mock: create → prompt → stream chunks
-- CloseRouter `--provider-profile` smoke: `closerouter-ok` (deepseek flash)
-
-### Smoke notes (2026-09-22)
-
-- **Live mock daemon:** create → prompt → stream chunks OK.
-- **CloseRouter `--provider-profile`:** OK (`closerouter-ok`, deepseek flash) —
-  separate from Codex; Keychain `impetus`/`openrouter`. Do **not** put this key
-  into `~/.codex/auth.json` / `OPENAI_API_KEY`.
-- **ACP + `gpt-5.6-luna` / low (ChatGPT auth):** path fixed end-to-end.
-  - Bug that looked like “auth broken”: `NO_BROWSER=1` in ACP profile env
-    **removes** advertised `chat-gpt` (only `api-key` left). Drop `NO_BROWSER`
-    for ChatGPT login; use `auth_method_id: "chat-gpt"` + isolated `CODEX_HOME`
-    with chatgpt tokens; strip CloseRouter/`OPENAI_API_KEY` from child env.
-  - Live result after fix: Codex ACP connects, Luna selected, then
-    `usageLimitExceeded` — *Your workspace is out of credits* (OpenAI workspace
-    quota, not Impetus/desktop wiring).
+- [x] **Thin boundary** — view / view state / typed Tauri / `HarnessClient` only;
+      no session SQLite, Keychain, or policy in the window.
+- [x] **IPC pin v14** — negotiate 12..=14; CI SHA
+      `7dc456a0062fd61c9d47d1abe2fed76fec56a12c`.
+- [x] **Runtime ensure** — `ensure_daemon_running_with` (shared daemon-control);
+      auto-ensure on open → Connected; Restart Runtime = Prefs → Advanced only.
+- [x] **Bundled sidecar wiring** — `bundle.externalBin` `binaries/impetusd`;
+      `scripts/prepare-impetusd-sidecar.sh`; resolve next to `current_exe()`
+      (before PATH). Local evidence: release `.app` runs
+      `Contents/MacOS/impetusd` on shared App Support socket; CLI `doctor`
+      sees IPC 14 on that daemon. `package-macos.yml` asserts binary in
+      bundle (dispatch/tag only — not Gate).
+- [x] Connect / probe / setup wizard (no auto-TCC on launch).
+- [x] Themes (≥2) + hotkeys in Prefs; session rail / topbar / composer chrome.
+- [x] Sessions / `send_prompt` / intents / mode / cancel / live subscribe →
+      transcript stream.
+- [x] **Reconnect** resumes live subscribe with `lastSeq` (no transcript wipe).
+- [x] Approvals from events + detail fetch.
+- [x] Attach / upload artifact path; BranchSelect / MCP / ListModels via harness
+      IPC (no local `git`, no Codex TOML parse).
+- [x] Right panel Files | Review | Agents (workspace tree, diff, child runs).
+- [x] Activity cards + reducer merge; `session.svelte.ts` transcript store.
+- [x] **Extensions** Prefs panel — list / enable / disable / reload via public IPC.
+- [x] **ModelSelect** including `service_tier` from daemon model APIs.
+- [x] **PTY** daemon-owned; TerminalPanel + reattach of **last detached** id
+      (no `PtyList` discovery UI).
+- [x] Probe `failure_kind` honesty; CSP non-null; no-privilege selfcheck;
+      Hello version / Incompatible warn on topbar.
+- [x] Perf baseline script; unit selfchecks (reducer, attachments, file-tree
+      boundary, extensions, etc.).
 
 ---
 
-## Hotkey map (Cursor → Impetus Desktop)
+## PARTIAL
 
-Shown in Preferences. Bound in `+page.svelte` `onKeydown`.
+- [ ] **Live E2E smokes** — many paths have unit selfchecks only. Still need
+      live `impetusd` smoke for: chat seq/event identity, artifact upload +
+      sent chips, Agents/`Child*`, PTY Start→type→Detach, ModelSelect,
+      Extensions toggle, mock vs real provider profile honesty.
+- [ ] Event reducer / `afterSeq` — unit covered; live duplicate-prompt /
+      session-switch smoke open.
+- [ ] Child runs — poll snapshot OK; live `Child*` parent-log events wait on
+      Core richness.
+- [ ] Daemon provider honesty UI (mock badge / profile paths) — wire present;
+      live E2E vs mock + real profile open.
+- [ ] Full perf matrix (cold start, large transcript, tree, diff, terminal) —
+      placeholders only.
+
+---
+
+## OPEN
+
+- [ ] **Release sign / notarize** — Developer ID + notarize + staple + GitHub
+      Release DMG; Hardened Runtime entitlements; optional updater after signed
+      channel exists.
+- [ ] **CodeMirror** (optional) — syntax highlight in FilePreview / DiffView
+      hunk nav. Not required for source of truth.
+- [ ] **Command palette** — ⌘K today focuses prompt only.
+- [ ] Fork / checkpoint thin UI (client APIs ready).
+- [ ] Optional typed-codegen for command DTOs (`ts-rs` / specta) — YAGNI until
+      drift hurts.
+- [ ] **`ReadArtifact` / artifact metadata UI** — Core IPC ready; Desktop has
+      upload path only.
+
+---
+
+## BLOCKED BY CORE
+
+- [ ] **PtyList attach picker** — discover / pick arbitrary detached PTY ids.
+      Desktop only reattaches last detached id until Core exposes list IPC.
+- [ ] **Multi-artifact on `SendPrompt`** — Core accepts a single artifact ref
+      today; multi-attach send needs daemon support.
+- [ ] **Session delete / rename / archive IPC** — Desktop rail uses local
+      presentation prefs (`sessionRailPrefs.ts`) until Core ships session
+      lifecycle commands.
+
+---
+
+## Implementation order
+
+1. Live E2E smokes on PARTIAL paths (chat seq, artifacts, PTY, Agents, models).
+2. Sign/notarize when release channel needed.
+3. Unblock when Core ships: PtyList, multi-artifact SendPrompt.
+4. Optional polish: CodeMirror, command palette, fork/checkpoint UI,
+   ReadArtifact UI.
+
+---
+
+## Hotkey map
+
+Shown in Preferences. Bound in `+page.svelte`.
 
 | Chord | Action |
 | --- | --- |
@@ -109,30 +133,24 @@ Shown in Preferences. Bound in `+page.svelte` `onKeydown`.
 | ⌘O | Open workspace |
 | ⌘G | Attach files |
 | ⌘↵ | Send |
-| ⌘K | Focus prompt |
+| ⌘K | Focus prompt (no palette yet) |
 | ⌘B | Toggle session rail |
-| Ctrl+` | Toggle terminal (daemon PTY) |
-| ⌘, / ⌃⇧/ | Preferences |
+| ⌘, | Preferences |
 | ⌘⇧T | Cycle theme pack |
 | ⌘L | Clear local transcript |
 | ⌘1…9 | Select chat by index |
 | Ctrl+T | Steer intent |
 | Ctrl+Shift+P | Cycle prompt intent |
-| Esc | Close overlay / Stop turn |
-| ⌘. | Stop turn |
+| Ctrl+` | Toggle terminal |
+| Esc / ⌘. | Close overlay / Stop turn |
 
 ---
 
-## Notes
+## Related
 
 | Doc | Role |
 | --- | --- |
-| [README.md](README.md) | Install / run / trust |
-| Sibling [impetus/TODO.md](../impetus/TODO.md) | Daemon + TUI backlog |
-| Issue [#310](https://github.com/1tuz/impetus/issues/310) | GUI adapter track |
-
-Inventory refresh: 2026-09-22 (desktop PTY over Impetus IPC **v12**).
-
-NOTE: P0 checkboxes marked for code wire-up. Confirm once against a live
-`impetusd` before treating as production-ready. Harness pin:
-[`.github/impetus-revision`](.github/impetus-revision) (IPC v12 PTY ownership).
+| [README.md](README.md) | Install / thin client / architecture |
+| [`impetus/ARCHITECTURE.md`](../impetus/ARCHITECTURE.md) | Daemon SoT |
+| [`impetus/TODO.md`](../impetus/TODO.md) | Core + TUI backlog |
+| [AGENTS.md](AGENTS.md) | Boundaries + verify |

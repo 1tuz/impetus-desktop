@@ -38,7 +38,7 @@ export const HOTKEY_HELP: { keys: string; action: string }[] = [
   { keys: "⌘/Ctrl+Enter", action: "Send prompt" },
   { keys: "⌘/Ctrl+K", action: "Focus prompt" },
   { keys: "⌘/Ctrl+B", action: "Toggle session rail" },
-  { keys: "Ctrl+`", action: "Toggle terminal (daemon PTY)" },
+  { keys: "⌘J / Ctrl+`", action: "Toggle terminal dock" },
   { keys: "⌘/Ctrl+,", action: "Preferences" },
   { keys: "⌃⇧/", action: "Preferences (shortcuts)" },
   { keys: "⌘/Ctrl+Shift+T", action: "Cycle theme pack" },

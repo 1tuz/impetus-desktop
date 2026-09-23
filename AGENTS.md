@@ -20,6 +20,23 @@ in the real app against a live `impetusd`.
 UI / visual polish: read `DESIGN.md` (token pointers + Visual QA log). Do not
 invent a second design system beside `src/app.css` / `src/lib/tokens/`.
 
+## Dev / QA — do not hijack the user's desktop
+
+**Hard rule for agents:**
+
+- **Do not** repeatedly `pnpm tauri dev`, kill/relaunch Impetus Desktop, move
+  `/Applications/Impetus Desktop.app`, or `macos_capture` / AppleScript /
+  `osascript` **focus** the native window unless the user **explicitly** asks
+  for a live native smoke in that turn.
+- **Default UI debug path:** Vite browser — `pnpm dev` (or existing Vite on
+  `127.0.0.1:1420`). Layout, tabs, buttons, CSS, click handlers → browser /
+  Cursor browser tools. Do not steal focus from the user's other windows.
+- **Tauri-only** pieces (`invoke`, PTY, folder pickers) need the native shell
+  **once**, when the user asks — not a loop of relaunch + focus + screenshot.
+- Prefer `pnpm check` / `pnpm test` / selfchecks over live window automation.
+- `macos-visual-qa` is opt-in: only when the user asks for visual QA of the
+  running macOS app.
+
 ## Immovable Boundaries
 
 - Thin shell: view + typed Tauri commands over Unix-socket IPC to `impetusd`.
@@ -107,6 +124,20 @@ violation.
    ```
 5. Required check `Gate` passes → GitHub auto-merges to main
 6. After merge: `git checkout main && git pull`
+
+#### Finish = ship (no ask)
+
+When the requested vertical slice is implemented and verify/checks are green
+on a feature branch, **complete the loop without asking**:
+
+1. Commit (issue ref; no secrets / QA dumps / build junk)
+2. Push (`-u` if needed)
+3. `gh pr create --fill` if no open PR
+4. `gh pr merge --auto --squash`
+
+Do **not** ask “commit?”, “push?”, or “automerge?”. Unpushed finished work
+counts as **incomplete**. Ask only for force-push, push to `main`, secrets in
+diff, ambiguous scope, or when the user said stop / don’t push.
 
 #### Auto-merge Setup (once per project)
 

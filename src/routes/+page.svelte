@@ -165,6 +165,7 @@
   let appearance = $state<AppearancePref>(DEFAULT_APPEARANCE);
   let themeId = $state(DEFAULT_THEME_ID);
   let showPrefs = $state(false);
+  // Restored from dock prefs in TerminalPanel onMount (default closed).
   let terminalOpen = $state(false);
   let rightPanelOpen = $state(true);
   let rightPanelTab = $state<"files" | "review" | "agents">("files");
@@ -1065,8 +1066,11 @@
   function onKeydown(event: KeyboardEvent) {
     suppressBrowserChrome(event);
 
-    // Ctrl+` toggles daemon PTY panel (thin xterm over harness IPC).
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "`") {
+    // ⌘J / Ctrl+` toggle bottom terminal dock (collapse keeps PTYs).
+    if (
+      (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "j") ||
+      (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "`")
+    ) {
       event.preventDefault();
       terminalOpen = !terminalOpen;
       return;

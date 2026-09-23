@@ -73,6 +73,7 @@ pub fn run() {
             commands::pty_detach,
             commands::pty_terminate,
             commands::pty_status,
+            commands::terminal_env,
             commands::pick_folder,
             commands::pick_files,
             commands::classify_paths,

@@ -2,7 +2,7 @@
  * Wire-presence selfcheck for P0/P1 harness IPC (subscribe, mode, intent).
  * Run: node --experimental-strip-types scripts/harness-ipc-selfcheck.ts
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -149,8 +149,19 @@ check("PTY Tauri cmds registered and TerminalPanel wired", () => {
       throw new Error(`lib.rs does not register ${name}`);
     }
   }
+  if (!lib.includes("commands::terminal_env")) {
+    throw new Error("lib.rs does not register terminal_env");
+  }
   const panel = readFileSync(
     join(root, "src/lib/components/TerminalPanel.svelte"),
+    "utf8",
+  );
+  const tabBarPath = join(root, "src/lib/components/TerminalTabBar.svelte");
+  const tabBar = existsSync(tabBarPath)
+    ? readFileSync(tabBarPath, "utf8")
+    : "";
+  const right = readFileSync(
+    join(root, "src/lib/components/RightPanel.svelte"),
     "utf8",
   );
   if (!panel.includes('"pty_start"')) {
@@ -165,8 +176,23 @@ check("PTY Tauri cmds registered and TerminalPanel wired", () => {
   if (!panel.includes("pty_output") || !panel.includes("pty_input")) {
     throw new Error("TerminalPanel missing output poll or input");
   }
-  if (!panel.includes("pty_attach") || !panel.includes("reattachPty")) {
-    throw new Error("TerminalPanel missing reattach via pty_attach");
+  if (!panel.includes("pty_attach")) {
+    throw new Error("TerminalPanel missing reconnect via pty_attach");
+  }
+  if (!panel.includes("pty_status")) {
+    throw new Error("TerminalPanel missing pty_status for reconnect prune");
+  }
+  if (!panel.includes("pty_terminate")) {
+    throw new Error("TerminalPanel missing pty_terminate for tab close");
+  }
+  if (
+    !tabBar.includes('role="tablist"') &&
+    !panel.includes('role="tablist"')
+  ) {
+    throw new Error("TerminalTabBar or TerminalPanel missing horizontal tablist");
+  }
+  if (right.includes("TerminalPanel") || right.includes("pty_start")) {
+    throw new Error("RightPanel must not host terminal list / pty_start");
   }
   if (!page.includes("TerminalPanel")) {
     throw new Error("page does not mount TerminalPanel");

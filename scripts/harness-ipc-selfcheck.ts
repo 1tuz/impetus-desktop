@@ -141,6 +141,7 @@ check("PTY Tauri cmds registered and TerminalPanel wired", () => {
     "pty_detach",
     "pty_terminate",
     "pty_status",
+    "pty_list",
   ]) {
     if (!harness.includes(`pub async fn ${name}`)) {
       throw new Error(`harness.rs missing ${name}`);
@@ -167,6 +168,12 @@ check("PTY Tauri cmds registered and TerminalPanel wired", () => {
   }
   if (!panel.includes("pty_attach") || !panel.includes("reattachPty")) {
     throw new Error("TerminalPanel missing reattach via pty_attach");
+  }
+  if (!panel.includes('"pty_list"') || !panel.includes("toggleAttachPicker")) {
+    throw new Error("TerminalPanel missing PtyList attach picker");
+  }
+  if (!panel.includes('aria-label="Attach PTY"')) {
+    throw new Error("TerminalPanel Attach picker missing accessible label");
   }
   if (!page.includes("TerminalPanel")) {
     throw new Error("page does not mount TerminalPanel");

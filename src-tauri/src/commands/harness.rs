@@ -1147,6 +1147,16 @@ pub struct PtySessionDto {
     pub command: String,
     pub cols: u16,
     pub rows: u16,
+    /// Additive IPC v15 — empty when older peers omit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at_unix_ms: Option<u64>,
+    /// `user` | `agent` when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1179,6 +1189,25 @@ fn pty_session_dto(view: impetus_client::PtySessionView) -> PtySessionDto {
         command: view.command,
         cols: view.cols,
         rows: view.rows,
+        args: view.args,
+        working_dir: view.working_dir,
+        created_at_unix_ms: view.created_at_unix_ms,
+        origin: view.origin,
+    }
+}
+
+fn pty_info_dto(info: impetus_client::protocol::PtySessionInfo) -> PtySessionDto {
+    PtySessionDto {
+        pty_id: info.pty_id,
+        owner_session_id: info.owner_session_id.to_string(),
+        state: pty_state_label(&info.state),
+        command: info.command,
+        cols: info.cols,
+        rows: info.rows,
+        args: info.args,
+        working_dir: info.working_dir,
+        created_at_unix_ms: info.created_at_unix_ms,
+        origin: info.origin,
     }
 }
 
@@ -1322,6 +1351,22 @@ pub async fn pty_status(
     let client = require_client(&guard)?;
     let view = client.pty_status(session_id, pty_id).await?;
     Ok(pty_session_dto(view))
+}
+
+/// Owner-scoped PTY inventory (`PtyList`, IPC v15+). Default `live_only=true`.
+#[tauri::command]
+pub async fn pty_list(
+    state: State<'_, HarnessState>,
+    session_id: String,
+    live_only: Option<bool>,
+) -> CommandResult<Vec<PtySessionDto>> {
+    let session_id = parse_uuid(&session_id, "session_id")?;
+    let guard = state.client.lock().await;
+    let client = require_client(&guard)?;
+    let sessions = client
+        .pty_list(session_id, live_only.unwrap_or(true))
+        .await?;
+    Ok(sessions.into_iter().map(pty_info_dto).collect())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1964,6 +2009,29 @@ mod tests {
         assert!(
             !prod.contains("create_new(true)"),
             "Desktop must not create daemon.spawn.lock itself"
+        );
+    }
+
+    #[test]
+    fn pty_list_command_wires_harness_client() {
+        let src = include_str!("harness.rs");
+        let prod_end = src.find("\n#[cfg(test)]").unwrap_or(src.len());
+        let prod = &src[..prod_end];
+        assert!(
+            prod.contains("pub async fn pty_list"),
+            "pty_list Tauri command required for attach picker"
+        );
+        assert!(
+            prod.contains(".pty_list("),
+            "pty_list must call HarnessClient::pty_list"
+        );
+        assert!(
+            prod.contains("fn pty_info_dto"),
+            "PtyList rows map through pty_info_dto"
+        );
+        assert!(
+            prod.contains("working_dir:") && prod.contains("created_at_unix_ms:"),
+            "PtySessionDto must expose IPC v15 metadata"
         );
     }
 

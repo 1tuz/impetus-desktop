@@ -22,10 +22,10 @@ sibling [`impetus`](../impetus) (`TODO.md`, `ARCHITECTURE.md`).
 
 | Fact | Value |
 | --- | --- |
-| Wire | Negotiate overlap — Core `IPC_VERSION=14`, `IPC_MIN_SUPPORTED=12` |
+| Wire | Negotiate overlap — Core `IPC_VERSION=15`, `IPC_MIN_SUPPORTED=12` |
 | Path dep | `src-tauri/Cargo.toml` → `../../impetus/crates/impetus-client` |
 | Daemon control | `impetus-daemon-control` via `ensure_daemon_running_with` + `discover_socket_path` (no local `spawn.lock` create) |
-| CI pin | `.github/impetus-revision` = `7dc456a0062fd61c9d47d1abe2fed76fec56a12c` |
+| CI pin | `.github/impetus-revision` = `9ac8f3c705037d305ec55f7a1199de4ca55b030b` |
 | Thin boundary | UI · view state · typed Tauri · HarnessClient only |
 
 Bump pin when Desktop needs a new client API. Local path-dep floats sibling tip;
@@ -37,15 +37,15 @@ CI stays pinned.
 
 - [x] **Thin boundary** — view / view state / typed Tauri / `HarnessClient` only;
       no session SQLite, Keychain, or policy in the window.
-- [x] **IPC pin v14** — negotiate 12..=14; CI SHA
-      `7dc456a0062fd61c9d47d1abe2fed76fec56a12c`.
+- [x] **IPC pin v15** — negotiate 12..=15; CI SHA
+      `9ac8f3c705037d305ec55f7a1199de4ca55b030b` (PtyList + package Install/Remove).
 - [x] **Runtime ensure** — `ensure_daemon_running_with` (shared daemon-control);
       auto-ensure on open → Connected; Restart Runtime = Prefs → Advanced only.
 - [x] **Bundled sidecar wiring** — `bundle.externalBin` `binaries/impetusd`;
       `scripts/prepare-impetusd-sidecar.sh`; resolve next to `current_exe()`
       (before PATH). Local evidence: release `.app` runs
       `Contents/MacOS/impetusd` on shared App Support socket; CLI `doctor`
-      sees IPC 14 on that daemon. `package-macos.yml` asserts binary in
+      sees IPC on that daemon. `package-macos.yml` asserts binary in
       bundle (dispatch/tag only — not Gate).
 - [x] Connect / probe / setup wizard (no auto-TCC on launch).
 - [x] Themes (≥2) + hotkeys in Prefs; session rail / topbar / composer chrome.
@@ -59,12 +59,13 @@ CI stays pinned.
 - [x] Activity cards + reducer merge; `session.svelte.ts` transcript store.
 - [x] **Extensions** Prefs panel — list / enable / disable / reload via public IPC.
 - [x] **ModelSelect** including `service_tier` from daemon model APIs.
-- [x] **PTY** daemon-owned; TerminalPanel + reattach of **last detached** id
-      (no `PtyList` discovery UI).
+- [x] **PTY** daemon-owned; TerminalPanel Start / Detach / Kill + **PtyList
+      attach picker** (`pty_list` → Attach menu → `pty_attach` for live ids
+      unknown to this panel; Reattach keeps last-detached shortcut).
 - [x] Probe `failure_kind` honesty; CSP non-null; no-privilege selfcheck;
       Hello version / Incompatible warn on topbar.
 - [x] Perf baseline script; unit selfchecks (reducer, attachments, file-tree
-      boundary, extensions, etc.).
+      boundary, extensions, pty-list, etc.).
 
 ---
 
@@ -72,8 +73,8 @@ CI stays pinned.
 
 - [ ] **Live E2E smokes** — many paths have unit selfchecks only. Still need
       live `impetusd` smoke for: chat seq/event identity, artifact upload +
-      sent chips, Agents/`Child*`, PTY Start→type→Detach, ModelSelect,
-      Extensions toggle, mock vs real provider profile honesty.
+      sent chips, Agents/`Child*`, PTY Start→type→Detach→PtyList Attach,
+      ModelSelect, Extensions toggle, mock vs real provider profile honesty.
 - [ ] Event reducer / `afterSeq` — unit covered; live duplicate-prompt /
       session-switch smoke open.
 - [ ] Child runs — poll snapshot OK; live `Child*` parent-log events wait on
@@ -103,8 +104,6 @@ CI stays pinned.
 
 ## BLOCKED BY CORE
 
-- [ ] **PtyList attach picker** — discover / pick arbitrary detached PTY ids.
-      Desktop only reattaches last detached id until Core exposes list IPC.
 - [ ] **Multi-artifact on `SendPrompt`** — Core accepts a single artifact ref
       today; multi-attach send needs daemon support.
 - [ ] **Session delete / rename / archive IPC** — Desktop rail uses local
@@ -117,7 +116,7 @@ CI stays pinned.
 
 1. Live E2E smokes on PARTIAL paths (chat seq, artifacts, PTY, Agents, models).
 2. Sign/notarize when release channel needed.
-3. Unblock when Core ships: PtyList, multi-artifact SendPrompt.
+3. Unblock when Core ships: multi-artifact SendPrompt.
 4. Optional polish: CodeMirror, command palette, fork/checkpoint UI,
    ReadArtifact UI.
 

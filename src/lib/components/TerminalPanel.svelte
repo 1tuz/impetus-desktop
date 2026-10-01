@@ -14,6 +14,10 @@
     command: string;
     cols: number;
     rows: number;
+    args?: string[];
+    working_dir?: string | null;
+    created_at_unix_ms?: number | null;
+    origin?: string | null;
   };
 
   type PtyOutputDto = {
@@ -40,8 +44,13 @@
   let errorText = $state("");
   let busy = $state(false);
   let ptyId = $state<number | null>(null);
-  /** Last detached pty_id for this session — presentation memory (no PtyList IPC). */
+  /** Last detached pty_id for this session — presentation memory. */
   let lastDetachedPtyId = $state<number | null>(null);
+
+  let attachOpen = $state(false);
+  let attachBusy = $state(false);
+  let attachRows = $state<PtySessionDto[]>([]);
+  let attachError = $state("");
 
   let term: Terminal | null = null;
   let fit: FitAddon | null = null;
@@ -59,6 +68,15 @@
       return String((err as { message: unknown }).message);
     }
     return String(err);
+  }
+
+  function ptyRowLabel(row: PtySessionDto): string {
+    const cmd = row.command.split("/").pop() || row.command;
+    const cwd = row.working_dir
+      ? ` · ${row.working_dir.split("/").slice(-2).join("/")}`
+      : "";
+    const origin = row.origin ? ` · ${row.origin}` : "";
+    return `#${row.pty_id} · ${row.state} · ${cmd}${cwd}${origin}`;
   }
 
   function stopPoll() {
@@ -224,29 +242,80 @@
     }
   }
 
-  async function reattachPty() {
-    if (!sessionId || !inTauriShell() || lastDetachedPtyId == null) return;
+  async function attachPtyId(targetId: number) {
+    if (!sessionId || !inTauriShell()) return;
     busy = true;
     errorText = "";
+    attachOpen = false;
     try {
       ensureTerm();
       fit?.fit();
       const view = await invoke<PtySessionDto>("pty_attach", {
         sessionId,
-        ptyId: lastDetachedPtyId,
+        ptyId: targetId,
       });
       ptyId = view.pty_id;
-      lastDetachedPtyId = null;
-      statusText = `pty ${view.pty_id} · ${view.state} · reattached`;
+      if (lastDetachedPtyId === targetId) {
+        lastDetachedPtyId = null;
+      }
+      statusText = `pty ${view.pty_id} · ${view.state} · attached`;
       term?.focus();
       startPoll();
       await drainOnce();
       await fitAndResize();
     } catch (err) {
       errorText = errorMessage(err);
-      statusText = "reattach failed";
+      statusText = "attach failed";
     } finally {
       busy = false;
+    }
+  }
+
+  async function reattachPty() {
+    if (lastDetachedPtyId == null) return;
+    await attachPtyId(lastDetachedPtyId);
+  }
+
+  async function refreshAttachList() {
+    if (!sessionId || !inTauriShell() || !connected) {
+      attachRows = [];
+      attachError = "Connect and select a session first";
+      return;
+    }
+    attachBusy = true;
+    attachError = "";
+    try {
+      const rows = await invoke<PtySessionDto[]>("pty_list", {
+        sessionId,
+        liveOnly: true,
+      });
+      // Omit the PTY already bound to this panel.
+      attachRows = rows.filter((row) => row.pty_id !== ptyId);
+      if (attachRows.length === 0) {
+        attachError = "No other live PTYs for this session";
+      }
+    } catch (err) {
+      attachRows = [];
+      attachError = errorMessage(err);
+    } finally {
+      attachBusy = false;
+    }
+  }
+
+  async function toggleAttachPicker() {
+    if (busy || !connected || !sessionId || ptyId !== null) return;
+    if (attachOpen) {
+      attachOpen = false;
+      return;
+    }
+    attachOpen = true;
+    await refreshAttachList();
+  }
+
+  function onAttachDocClick(e: MouseEvent) {
+    const t = e.target as HTMLElement | null;
+    if (!t?.closest(".pty-attach")) {
+      attachOpen = false;
     }
   }
 
@@ -274,6 +343,8 @@
       stopPoll();
       ptyId = null;
       lastDetachedPtyId = null;
+      attachOpen = false;
+      attachRows = [];
       statusText = "idle";
       errorText = "";
     }
@@ -288,6 +359,19 @@
         void fitAndResize();
       });
     }
+  });
+
+  $effect(() => {
+    if (!attachOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") attachOpen = false;
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onAttachDocClick);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onAttachDocClick);
+    };
   });
 
   onMount(() => {
@@ -323,6 +407,74 @@
           <Icon name="terminal" size={14} />
           Start
         </Button>
+        <div class="pty-attach">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy || !connected || !sessionId || ptyId !== null}
+            title="Attach a live PTY from Runtime inventory"
+            aria-label="Attach PTY"
+            aria-expanded={attachOpen}
+            aria-haspopup="listbox"
+            onclick={() => void toggleAttachPicker()}
+          >
+            Attach
+            <Icon name="chevron-down" size={12} />
+          </Button>
+          {#if attachOpen}
+            <div class="pty-attach-menu" role="listbox" aria-label="Live PTYs">
+              {#if attachBusy}
+                <p class="pty-attach-empty">Loading…</p>
+              {:else if attachError && attachRows.length === 0}
+                <p class="pty-attach-empty">{attachError}</p>
+              {:else}
+                {#each attachRows as row (row.pty_id)}
+                  <button
+                    type="button"
+                    class="pty-attach-row"
+                    class:hint={lastDetachedPtyId === row.pty_id}
+                    role="option"
+                    aria-selected={false}
+                    title={ptyRowLabel(row)}
+                    onclick={() => void attachPtyId(row.pty_id)}
+                  >
+                    <span class="pty-attach-id mono">#{row.pty_id}</span>
+                    <span class="pty-attach-copy">
+                      <span class="pty-attach-state">{row.state}</span>
+                      <span class="pty-attach-cmd mono"
+                        >{row.command.split("/").pop() || row.command}</span
+                      >
+                    </span>
+                  </button>
+                {/each}
+              {/if}
+              {#if lastDetachedPtyId != null && !attachRows.some((r) => r.pty_id === lastDetachedPtyId)}
+                <button
+                  type="button"
+                  class="pty-attach-row hint"
+                  role="option"
+                  aria-selected={false}
+                  title={`Reattach last detached pty ${lastDetachedPtyId}`}
+                  onclick={() => void reattachPty()}
+                >
+                  <span class="pty-attach-id mono">#{lastDetachedPtyId}</span>
+                  <span class="pty-attach-copy">
+                    <span class="pty-attach-state">last detached</span>
+                    <span class="pty-attach-cmd mono">reattach</span>
+                  </span>
+                </button>
+              {/if}
+              <button
+                type="button"
+                class="pty-attach-refresh"
+                disabled={attachBusy}
+                onclick={() => void refreshAttachList()}
+              >
+                Refresh
+              </button>
+            </div>
+          {/if}
+        </div>
         <Button
           variant="ghost"
           size="sm"
@@ -421,6 +573,107 @@
     align-items: center;
     gap: var(--space-1);
     flex-shrink: 0;
+  }
+
+  .pty-attach {
+    position: relative;
+  }
+
+  .pty-attach-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 40;
+    min-width: 16rem;
+    max-width: 22rem;
+    max-height: 14rem;
+    overflow-y: auto;
+    padding: var(--space-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--panel);
+    box-shadow: var(--shadow-md, 0 8px 24px rgb(0 0 0 / 0.25));
+  }
+
+  .pty-attach-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    width: 100%;
+    margin: 0;
+    padding: var(--space-2);
+    border: 0;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .pty-attach-row:hover {
+    background: var(--elevated);
+  }
+
+  .pty-attach-row.hint {
+    outline: 1px solid color-mix(in srgb, var(--accent, #a1a1aa) 35%, transparent);
+  }
+
+  .pty-attach-id {
+    flex-shrink: 0;
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  .pty-attach-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .pty-attach-state {
+    font-size: var(--text-xs);
+    color: var(--text);
+  }
+
+  .pty-attach-cmd {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  .pty-attach-empty {
+    margin: 0;
+    padding: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+
+  .pty-attach-refresh {
+    display: block;
+    width: 100%;
+    margin-top: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+
+  .pty-attach-refresh:hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .pty-attach-refresh:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .pty-error {

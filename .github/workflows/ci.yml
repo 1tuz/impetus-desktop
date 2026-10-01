@@ -17,7 +17,7 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_TERM_COLOR: always
   # Keep in sync with .github/impetus-revision (detect job asserts equality).
-  IMPETUS_REF: 7dc456a0062fd61c9d47d1abe2fed76fec56a12c
+  IMPETUS_REF: 9ac8f3c705037d305ec55f7a1199de4ca55b030b
 
 jobs:
   detect:
